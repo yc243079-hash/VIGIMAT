@@ -241,6 +241,7 @@ class _ChiefDashboardPageState extends State<ChiefDashboardPage> {
                 ? DashboardOverview(
                     key: ValueKey('chief-dashboard-$_dashboardGeneration'),
                     displayName: _displayName,
+                    audience: DashboardAudience.unitHead,
                     roleLabel: 'Espace chef d’unité · Vue globale',
                     onRefresh: _loadReports,
                     below: _latestReportsSection(),

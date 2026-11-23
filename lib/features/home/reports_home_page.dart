@@ -368,6 +368,7 @@ class _ReportsHomePageState extends State<ReportsHomePage> {
                 ? DashboardOverview(
                     key: ValueKey('technician-dashboard-$_dashboardGeneration'),
                     displayName: _displayName,
+                    audience: DashboardAudience.technician,
                     roleLabel: SupabaseConfig.isConfigured
                         ? 'Espace technicien'
                         : 'Mode local',
@@ -558,8 +559,6 @@ class _ReportsHomePageState extends State<ReportsHomePage> {
   Widget _dashboardQuickActions() => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      Text('Accès rapide', style: Theme.of(context).textTheme.titleLarge),
-      const SizedBox(height: 10),
       LayoutBuilder(
         builder: (context, constraints) {
           const gap = 10.0;
