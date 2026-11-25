@@ -2,13 +2,19 @@ import 'package:flutter/material.dart';
 
 abstract final class VigimatColors {
   static const navy = Color(0xFF142B4A);
-  static const turquoise = Color(0xFF18A6A6);
+  static const turquoise = Color(0xFF14B8A6);
   static const background = Color(0xFFF4F6FA);
   static const muted = Color(0xFF687386);
   static const border = Color(0xFFE7EBF1);
-  static const orange = Color(0xFFB36B12);
-  static const red = Color(0xFFB84242);
-  static const green = Color(0xFF17815E);
+  static const orange = Color(0xFFF59E0B);
+  static const red = Color(0xFFDC2626);
+  static const green = Color(0xFF16A34A);
+
+  // Fonds doux pour les badges et icônes de statut
+  static const redSoft = Color(0xFFFEE2E2);
+  static const orangeSoft = Color(0xFFFEF3C7);
+  static const greenSoft = Color(0xFFDCFCE7);
+  static const turquoiseSoft = Color(0xFFCCFBF1);
 }
 
 class VigimatLogoMark extends StatelessWidget {

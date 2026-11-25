@@ -5,7 +5,6 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../../core/vigimat_brand.dart';
 import '../../models/equipment.dart';
 import '../../services/equipment_repository.dart';
-import '../reports/report_form_page.dart';
 import 'equipment_edit_page.dart';
 
 class EquipmentListPage extends StatefulWidget {
@@ -509,21 +508,6 @@ class _EquipmentDetailPageState extends State<EquipmentDetailPage> {
     if (mounted) Navigator.of(context).pop(true);
   }
 
-  Future<void> _openReportForm() async {
-    final created = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(
-        builder: (_) => ReportFormPage(
-          initialEquipmentId: _equipment.id,
-          initialEquipmentName: _equipment.name,
-        ),
-      ),
-    );
-    if (created == true) {
-      await widget.onReportCreated?.call();
-      if (mounted) await _loadDetails();
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final color = _statusColor(_equipment.status);
@@ -610,15 +594,7 @@ class _EquipmentDetailPageState extends State<EquipmentDetailPage> {
           const SizedBox(height: 12),
           _qrCard(),
           const SizedBox(height: 12),
-          FilledButton.icon(
-            onPressed: _openReportForm,
-            icon: const Icon(Icons.report_outlined),
-            label: const Text('Signaler une panne'),
-            style: FilledButton.styleFrom(
-              minimumSize: const Size.fromHeight(50),
-            ),
-          ),
-          const SizedBox(height: 22),
+          const SizedBox(height: 12),
           Text(
             'Historique des pannes',
             style: Theme.of(context).textTheme.titleLarge,

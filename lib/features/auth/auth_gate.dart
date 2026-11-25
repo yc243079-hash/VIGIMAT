@@ -1,49 +1,15 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/mali_identity.dart';
 import '../../core/vigimat_brand.dart';
-import '../../services/push_notification_service.dart';
+import '../../models/app_user_profile.dart';
+import '../../services/app_profile_service.dart';
 import '../chief/chief_dashboard_page.dart';
 import '../home/reports_home_page.dart';
-
-Map<String, dynamic>? _decodeJwtPayload(String? token) {
-  if (token == null || token.split('.').length != 3) return null;
-
-  try {
-    final payload = token.split('.')[1];
-    final normalized = payload + '=' * ((4 - payload.length % 4) % 4);
-    final decoded = utf8.decode(base64Url.decode(normalized));
-    final parsed = jsonDecode(decoded);
-    if (parsed is Map<String, dynamic>) {
-      return parsed;
-    }
-    if (parsed is Map) {
-      return Map<String, dynamic>.from(parsed);
-    }
-  } catch (_) {
-    return null;
-  }
-  return null;
-}
-
-String? resolveUserRole(User user, {String? accessToken}) {
-  final metadataRole = user.appMetadata['role'] ?? user.userMetadata?['role'];
-  final normalizedMetadataRole = metadataRole?.toString().trim().toLowerCase();
-  if (normalizedMetadataRole != null && normalizedMetadataRole.isNotEmpty) {
-    return normalizedMetadataRole;
-  }
-
-  final jwtPayload = _decodeJwtPayload(accessToken);
-  final jwtRole =
-      jwtPayload?['app_metadata']?['role'] ??
-      jwtPayload?['user_metadata']?['role'] ??
-      jwtPayload?['role'];
-  return jwtRole?.toString().trim().toLowerCase();
-}
+import '../soldier/soldier_home_page.dart';
 
 class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
@@ -57,18 +23,28 @@ class _AuthGateState extends State<AuthGate> {
   StreamSubscription<AuthState>? _authSubscription;
   User? _user;
   String? _authError;
+  AppUserProfile? _profile;
+  bool _profileLoading = false;
 
   @override
   void initState() {
     super.initState();
     _user = _client.auth.currentUser;
+    if (_user != null) {
+      _profileLoading = true;
+      unawaited(_loadProfile(_user));
+    }
     _authSubscription = _client.auth.onAuthStateChange.listen(
       (state) {
         if (mounted) {
+          final user = state.session?.user;
           setState(() {
-            _user = state.session?.user;
+            _user = user;
+            _profile = null;
+            _profileLoading = user != null;
             _authError = null;
           });
+          unawaited(_loadProfile(user));
         }
       },
       onError: (Object error) {
@@ -93,15 +69,33 @@ class _AuthGateState extends State<AuthGate> {
       return const LoginPage();
     }
 
-    final role = resolveUserRole(
-      user,
-      accessToken: _client.auth.currentSession?.accessToken,
-    );
-    switch (role) {
+    if (_profileLoading) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    final profile = _profile;
+    if (profile == null) {
+      return _messagePage(
+        'Profil indisponible',
+        _authError ?? 'Le compte ne possède pas de profil VIGIMAT valide.',
+        onSignOut: () => unawaited(_signOut()),
+      );
+    }
+    switch (profile.role) {
       case 'technician':
-        return ReportsHomePage(onSignOut: () => unawaited(_signOut()));
+        return ReportsHomePage(
+          profile: profile,
+          onSignOut: () => unawaited(_signOut()),
+        );
       case 'unit_head':
-        return ChiefDashboardPage(onSignOut: () => unawaited(_signOut()));
+        return ChiefDashboardPage(
+          profile: profile,
+          onSignOut: () => unawaited(_signOut()),
+        );
+      case 'soldier':
+        return SoldierHomePage(
+          profile: profile,
+          onSignOut: () => unawaited(_signOut()),
+        );
       default:
         return _messagePage(
           'Accès non attribué',
@@ -111,9 +105,31 @@ class _AuthGateState extends State<AuthGate> {
     }
   }
 
+  Future<void> _loadProfile(User? user) async {
+    if (user == null) {
+      if (mounted) setState(() => _profileLoading = false);
+      return;
+    }
+    try {
+      final profile = await AppProfileService().loadForCurrentUser();
+      if (!mounted || _client.auth.currentUser?.id != user.id) return;
+      setState(() {
+        _profile = profile;
+        _profileLoading = false;
+        _authError = null;
+      });
+    } catch (error) {
+      if (!mounted || _client.auth.currentUser?.id != user.id) return;
+      setState(() {
+        _profile = null;
+        _profileLoading = false;
+        _authError = error.toString();
+      });
+    }
+  }
+
   Future<void> _signOut() async {
     try {
-      await PushNotificationService.instance.unregisterCurrentDevice();
       await _client.auth.signOut();
     } catch (error) {
       if (!mounted) return;

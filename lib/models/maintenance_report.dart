@@ -7,8 +7,11 @@ class MaintenanceReport {
     required this.description,
     required this.priority,
     required this.createdAt,
+    this.updatedAt,
     required this.syncState,
     this.technicianId,
+    this.reporterId,
+    this.unitId,
     this.equipmentId,
     this.assignedTechnicianId,
     this.interventionDueAt,
@@ -16,6 +19,13 @@ class MaintenanceReport {
     this.faultCategory = 'Autre',
     this.location = '',
     this.reporterName = '',
+    this.vehicleRegistration = '',
+    this.vehicleDetails = '',
+    this.latitude,
+    this.longitude,
+    this.locationAccuracyM,
+    this.repairNote = '',
+    this.waitingReason = '',
     this.status = 'new',
     this.photoPath,
     this.photoPaths = const [],
@@ -30,8 +40,11 @@ class MaintenanceReport {
   final String description;
   final String priority;
   final DateTime createdAt;
+  final DateTime? updatedAt;
   final String syncState;
   final String? technicianId;
+  final String? reporterId;
+  final String? unitId;
   final String? equipmentId;
   final String? assignedTechnicianId;
   final DateTime? interventionDueAt;
@@ -39,6 +52,13 @@ class MaintenanceReport {
   final String faultCategory;
   final String location;
   final String reporterName;
+  final String vehicleRegistration;
+  final String vehicleDetails;
+  final double? latitude;
+  final double? longitude;
+  final double? locationAccuracyM;
+  final String repairNote;
+  final String waitingReason;
   final String status;
   final String? photoPath;
   final List<String> photoPaths;
@@ -58,8 +78,11 @@ class MaintenanceReport {
     'description': description,
     'priority': priority,
     'created_at': createdAt.toIso8601String(),
+    'updated_at': updatedAt?.toIso8601String(),
     'sync_state': syncState,
     'technician_id': technicianId,
+    'reporter_id': reporterId,
+    'unit_id': unitId,
     'equipment_id': equipmentId,
     'assigned_technician_id': assignedTechnicianId,
     'intervention_due_at': interventionDueAt?.toIso8601String(),
@@ -67,6 +90,13 @@ class MaintenanceReport {
     'fault_category': faultCategory,
     'location': location,
     'reporter_name': reporterName,
+    'vehicle_registration': vehicleRegistration,
+    'vehicle_details': vehicleDetails,
+    'latitude': latitude,
+    'longitude': longitude,
+    'location_accuracy_m': locationAccuracyM,
+    'repair_note': repairNote,
+    'waiting_reason': waitingReason,
     'status': status,
     'photo_path':
         photoPath ?? (allPhotoPaths.isEmpty ? null : allPhotoPaths.first),
@@ -82,8 +112,11 @@ class MaintenanceReport {
       description: map['description']! as String,
       priority: map['priority']! as String,
       createdAt: DateTime.parse(map['created_at']! as String),
+      updatedAt: DateTime.tryParse(map['updated_at'] as String? ?? ''),
       syncState: map['sync_state']! as String,
       technicianId: map['technician_id'] as String?,
+      reporterId: map['reporter_id'] as String?,
+      unitId: map['unit_id'] as String?,
       equipmentId: map['equipment_id'] as String?,
       assignedTechnicianId: map['assigned_technician_id'] as String?,
       interventionDueAt: DateTime.tryParse(
@@ -94,6 +127,13 @@ class MaintenanceReport {
       faultCategory: map['fault_category'] as String? ?? 'Autre',
       location: map['location'] as String? ?? '',
       reporterName: map['reporter_name'] as String? ?? '',
+      vehicleRegistration: map['vehicle_registration'] as String? ?? '',
+      vehicleDetails: map['vehicle_details'] as String? ?? '',
+      latitude: _doubleFromMap(map['latitude']),
+      longitude: _doubleFromMap(map['longitude']),
+      locationAccuracyM: _doubleFromMap(map['location_accuracy_m']),
+      repairNote: map['repair_note'] as String? ?? '',
+      waitingReason: map['waiting_reason'] as String? ?? '',
       status: map['status'] as String? ?? 'new',
       photoPath: map['photo_path'] as String?,
       photoPaths: _photoPathsFromMap(map),
@@ -114,8 +154,11 @@ class MaintenanceReport {
       description: map['description']?.toString() ?? '',
       priority: map['priority']?.toString() ?? 'Moyenne',
       createdAt: createdAt,
+      updatedAt: DateTime.tryParse(map['updated_at']?.toString() ?? ''),
       syncState: 'sent',
       technicianId: map['technician_id']?.toString(),
+      reporterId: map['reporter_id']?.toString(),
+      unitId: map['unit_id']?.toString(),
       equipmentId: map['equipment_id']?.toString(),
       assignedTechnicianId: map['assigned_technician_id']?.toString(),
       interventionDueAt: DateTime.tryParse(
@@ -125,35 +168,62 @@ class MaintenanceReport {
       faultCategory: map['fault_category']?.toString() ?? 'Autre',
       location: map['location']?.toString() ?? '',
       reporterName: map['reporter_name']?.toString() ?? '',
+      vehicleRegistration: map['vehicle_registration']?.toString() ?? '',
+      vehicleDetails: map['vehicle_details']?.toString() ?? '',
+      latitude: _doubleFromMap(map['latitude']),
+      longitude: _doubleFromMap(map['longitude']),
+      locationAccuracyM: _doubleFromMap(map['location_accuracy_m']),
+      repairNote: map['repair_note']?.toString() ?? '',
+      waitingReason: map['waiting_reason']?.toString() ?? '',
       status: map['status']?.toString() ?? 'new',
       remotePhotoPaths: _remotePhotoPathsFromMap(map),
       remoteAudioPath: map['audio_object_path']?.toString(),
     );
   }
 
-  MaintenanceReport mergeRemote(MaintenanceReport remote) => MaintenanceReport(
-    id: id,
-    equipmentName: remote.equipmentName,
-    description: remote.description,
-    priority: remote.priority,
-    createdAt: remote.createdAt,
-    syncState: syncState,
-    technicianId: technicianId ?? remote.technicianId,
-    equipmentId: equipmentId ?? remote.equipmentId,
-    assignedTechnicianId: remote.assignedTechnicianId,
-    interventionDueAt: remote.interventionDueAt,
-    reference: remote.reference,
-    faultCategory: remote.faultCategory,
-    location: remote.location,
-    reporterName: remote.reporterName,
-    status: remote.status,
-    photoPath: photoPath,
-    photoPaths: photoPaths,
-    remotePhotoPaths: remote.remotePhotoPaths,
-    audioPath: audioPath,
-    remoteAudioPath: remote.remoteAudioPath,
-    syncError: syncError,
-  );
+  MaintenanceReport mergeRemote(MaintenanceReport remote) {
+    final _isPending = syncState == 'pending' || syncState == 'syncing';
+    return MaintenanceReport(
+      id: id,
+      equipmentName: remote.equipmentName,
+      description: remote.description,
+      priority: remote.priority,
+      createdAt: remote.createdAt,
+      updatedAt: remote.updatedAt ?? updatedAt,
+      syncState: syncState,
+      technicianId: technicianId ?? remote.technicianId,
+      reporterId: reporterId ?? remote.reporterId,
+      unitId: unitId ?? remote.unitId,
+      equipmentId: equipmentId ?? remote.equipmentId,
+      assignedTechnicianId:
+          _isPending ? assignedTechnicianId : remote.assignedTechnicianId,
+      interventionDueAt:
+          _isPending ? interventionDueAt : remote.interventionDueAt,
+      reference: remote.reference,
+      faultCategory: remote.faultCategory,
+      location: remote.location,
+      reporterName: remote.reporterName,
+      vehicleRegistration: remote.vehicleRegistration,
+      vehicleDetails: remote.vehicleDetails,
+      latitude: remote.latitude,
+      longitude: remote.longitude,
+      locationAccuracyM: remote.locationAccuracyM,
+      repairNote: _isPending ? repairNote : remote.repairNote,
+      waitingReason: _isPending ? waitingReason : remote.waitingReason,
+      status: _isPending ? status : remote.status,
+      photoPath: photoPath,
+      photoPaths: photoPaths,
+      remotePhotoPaths: remote.remotePhotoPaths,
+      audioPath: audioPath,
+      remoteAudioPath: remote.remoteAudioPath,
+      syncError: syncError,
+    );
+  }
+}
+
+double? _doubleFromMap(Object? value) {
+  if (value is num) return value.toDouble();
+  return double.tryParse(value?.toString() ?? '');
 }
 
 List<String> _photoPathsFromMap(Map<String, Object?> map) {
