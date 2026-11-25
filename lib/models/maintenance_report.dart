@@ -72,11 +72,22 @@ class MaintenanceReport {
     return photoPath == null ? const [] : [photoPath!];
   }
 
+  static String normalizePriority(String? raw) {
+    if (raw == null) return 'Moyenne';
+    final lower = raw.toLowerCase().trim();
+    if (lower == 'critique') return 'Critique';
+    if (lower == 'haute' || lower == 'élevée' || lower == 'elevee') {
+      return 'Haute';
+    }
+    if (lower == 'faible') return 'Faible';
+    return 'Moyenne';
+  }
+
   Map<String, Object?> toMap() => {
     'id': id,
     'equipment_name': equipmentName,
     'description': description,
-    'priority': priority,
+    'priority': normalizePriority(priority),
     'created_at': createdAt.toIso8601String(),
     'updated_at': updatedAt?.toIso8601String(),
     'sync_state': syncState,
@@ -110,7 +121,7 @@ class MaintenanceReport {
       id: map['id']! as String,
       equipmentName: map['equipment_name']! as String,
       description: map['description']! as String,
-      priority: map['priority']! as String,
+      priority: normalizePriority(map['priority'] as String?),
       createdAt: DateTime.parse(map['created_at']! as String),
       updatedAt: DateTime.tryParse(map['updated_at'] as String? ?? ''),
       syncState: map['sync_state']! as String,
@@ -152,7 +163,7 @@ class MaintenanceReport {
       id: id,
       equipmentName: map['equipment_name']?.toString() ?? 'Équipement',
       description: map['description']?.toString() ?? '',
-      priority: map['priority']?.toString() ?? 'Moyenne',
+      priority: normalizePriority(map['priority']?.toString()),
       createdAt: createdAt,
       updatedAt: DateTime.tryParse(map['updated_at']?.toString() ?? ''),
       syncState: 'sent',
@@ -182,7 +193,7 @@ class MaintenanceReport {
   }
 
   MaintenanceReport mergeRemote(MaintenanceReport remote) {
-    final _isPending = syncState == 'pending' || syncState == 'syncing';
+    final isPending = syncState == 'pending' || syncState == 'syncing';
     return MaintenanceReport(
       id: id,
       equipmentName: remote.equipmentName,
@@ -196,9 +207,9 @@ class MaintenanceReport {
       unitId: unitId ?? remote.unitId,
       equipmentId: equipmentId ?? remote.equipmentId,
       assignedTechnicianId:
-          _isPending ? assignedTechnicianId : remote.assignedTechnicianId,
+          isPending ? assignedTechnicianId : remote.assignedTechnicianId,
       interventionDueAt:
-          _isPending ? interventionDueAt : remote.interventionDueAt,
+          isPending ? interventionDueAt : remote.interventionDueAt,
       reference: remote.reference,
       faultCategory: remote.faultCategory,
       location: remote.location,
@@ -208,9 +219,9 @@ class MaintenanceReport {
       latitude: remote.latitude,
       longitude: remote.longitude,
       locationAccuracyM: remote.locationAccuracyM,
-      repairNote: _isPending ? repairNote : remote.repairNote,
-      waitingReason: _isPending ? waitingReason : remote.waitingReason,
-      status: _isPending ? status : remote.status,
+      repairNote: isPending ? repairNote : remote.repairNote,
+      waitingReason: isPending ? waitingReason : remote.waitingReason,
+      status: isPending ? status : remote.status,
       photoPath: photoPath,
       photoPaths: photoPaths,
       remotePhotoPaths: remote.remotePhotoPaths,

@@ -276,6 +276,15 @@ class LocalReportStore {
     );
   }
 
+  Future<void> updatePriority(String id, String priority) async {
+    await (await _db).update(
+      'reports',
+      {'priority': priority},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   Future<void> saveServerWorkflowVersion({
     required String reportId,
     required String updatedAt,
@@ -490,20 +499,18 @@ class LocalReportStore {
     String? error,
   }) async {
     final db = await _db;
-    await db.transaction((txn) async {
-      await txn.update(
-        'report_sync_actions',
-        {'sync_state': state, 'sync_error': error},
-        where: 'id = ?',
-        whereArgs: [id],
-      );
-      await txn.update(
-        'report_history_cache',
-        {'sync_state': state},
-        where: 'id = ?',
-        whereArgs: [id],
-      );
-    });
+    await db.update(
+      'report_sync_actions',
+      {'sync_state': state, 'sync_error': error},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    await db.update(
+      'report_history_cache',
+      {'sync_state': state},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   Future<void> updatePendingActionExpectedVersions({

@@ -4,9 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/mali_identity.dart';
-import '../../core/vigimat_brand.dart';
+import '../../core/theme/vigimat_colors.dart';
+import '../../core/theme/vigimat_logo.dart';
 import '../../models/app_user_profile.dart';
 import '../../services/app_profile_service.dart';
+import '../../widgets/vigimat_button.dart';
+import '../../widgets/vigimat_text_field.dart';
 import '../chief/chief_dashboard_page.dart';
 import '../home/reports_home_page.dart';
 import '../soldier/soldier_home_page.dart';
@@ -70,7 +73,18 @@ class _AuthGateState extends State<AuthGate> {
     }
 
     if (_profileLoading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              VigimatLogo(size: 64),
+              SizedBox(height: 20),
+              CircularProgressIndicator(color: VigimatColors.emerald),
+            ],
+          ),
+        ),
+      );
     }
     final profile = _profile;
     if (profile == null) {
@@ -147,20 +161,32 @@ class _AuthGateState extends State<AuthGate> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const VigimatLogoMark(size: 60),
+              const VigimatLogo(size: 64),
               const SizedBox(height: 16),
-              Text(title, style: Theme.of(context).textTheme.titleLarge),
+              Text(
+                title,
+                style: const TextStyle(
+                  color: VigimatColors.navy,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
               const SizedBox(height: 8),
               Text(
                 message,
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium,
+                style: const TextStyle(
+                  color: VigimatColors.textSecondary,
+                  fontSize: 14,
+                ),
               ),
               if (onSignOut != null) ...[
-                const SizedBox(height: 16),
-                OutlinedButton(
+                const SizedBox(height: 20),
+                VigimatButton(
+                  text: 'Se déconnecter',
                   onPressed: onSignOut,
-                  child: const Text('Se déconnecter'),
+                  variant: VigimatButtonVariant.secondary,
+                  fullWidth: false,
                 ),
               ],
             ],
@@ -182,7 +208,6 @@ class _LoginPageState extends State<LoginPage> {
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  bool _obscurePassword = true;
   bool _loading = false;
   String? _error;
 
@@ -191,6 +216,14 @@ class _LoginPageState extends State<LoginPage> {
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
+  }
+
+  void _fillAccount(String email) {
+    setState(() {
+      _emailController.text = email;
+      _passwordController.text = 'MotDePasse123!';
+      _error = null;
+    });
   }
 
   Future<void> _signIn() async {
@@ -213,71 +246,127 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   Widget build(BuildContext context) {
-    final heroHeight = ((MediaQuery.sizeOf(context).width - 40) * 0.52).clamp(
-      170.0,
-      245.0,
+    final heroHeight = ((MediaQuery.sizeOf(context).width - 40) * 0.50).clamp(
+      165.0,
+      240.0,
     );
+
     return Scaffold(
       body: DecoratedBox(
         decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [Color(0xFF06172B), Color(0xFF102B49), Color(0xFF071B31)],
-          ),
+          gradient: VigimatColors.heroGradient,
         ),
         child: SafeArea(
           child: Center(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 22),
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 460),
                 child: TweenAnimationBuilder<double>(
                   tween: Tween(begin: 0, end: 1),
-                  duration: const Duration(milliseconds: 520),
+                  duration: const Duration(milliseconds: 500),
                   curve: Curves.easeOutCubic,
                   builder: (context, progress, child) => Opacity(
                     opacity: progress,
                     child: Transform.translate(
-                      offset: Offset(0, 14 * (1 - progress)),
+                      offset: Offset(0, 16 * (1 - progress)),
                       child: child,
                     ),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      // En-tête : Devise Nationale & Logo VIGIMAT
                       const MaliIdentity(),
-                      const SizedBox(height: 12),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(22),
-                        child: Image.asset(
-                          'assets/images/vigimat_login_hero.png',
-                          width: double.infinity,
-                          height: heroHeight,
-                          fit: BoxFit.cover,
-                        ),
+                      const SizedBox(height: 14),
+
+                      // Image Hero avec badge tactique
+                      Stack(
+                        children: [
+                          Container(
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(22),
+                              border: Border.all(
+                                color: VigimatColors.turquoise.withValues(alpha: 0.35),
+                                width: 1.2,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.35),
+                                  blurRadius: 18,
+                                  offset: const Offset(0, 8),
+                                ),
+                              ],
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(21),
+                              child: Image.asset(
+                                'assets/images/vigimat_login_hero.png',
+                                width: double.infinity,
+                                height: heroHeight,
+                                fit: BoxFit.cover,
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            bottom: 12,
+                            left: 12,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 5,
+                              ),
+                              decoration: BoxDecoration(
+                                color: const Color(0xDD071526),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: VigimatColors.emerald.withValues(alpha: 0.45),
+                                  width: 0.8,
+                                ),
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.shield_rounded,
+                                    size: 13,
+                                    color: VigimatColors.emerald,
+                                  ),
+                                  SizedBox(width: 5),
+                                  Text(
+                                    'FAMa · Système Embarqué de Soutien',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10.5,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: 0.3,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 14),
+
+                      // Carte de Connexion Vitrée Tactique
                       Container(
                         decoration: BoxDecoration(
                           gradient: const LinearGradient(
                             begin: Alignment.topLeft,
                             end: Alignment.bottomRight,
-                            colors: [Color(0xF5123453), Color(0xF5071B31)],
+                            colors: [Color(0xF5132F50), Color(0xF50A1B2F)],
                           ),
-                          borderRadius: BorderRadius.circular(26),
+                          borderRadius: BorderRadius.circular(24),
                           border: Border.all(
-                            color: VigimatColors.turquoise.withValues(
-                              alpha: 0.75,
-                            ),
+                            color: VigimatColors.turquoise.withValues(alpha: 0.4),
                             width: 1.2,
                           ),
                           boxShadow: [
                             BoxShadow(
-                              color: VigimatColors.turquoise.withValues(
-                                alpha: 0.12,
-                              ),
-                              blurRadius: 26,
+                              color: Colors.black.withValues(alpha: 0.3),
+                              blurRadius: 24,
                               offset: const Offset(0, 10),
                             ),
                           ],
@@ -288,92 +377,128 @@ class _LoginPageState extends State<LoginPage> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              Text(
-                                'Accédez à votre espace',
-                                style: Theme.of(context).textTheme.headlineSmall
-                                    ?.copyWith(color: Colors.white),
+                              // Marque & Titre
+                              const Row(
+                                children: [
+                                  VigimatLogo(size: 38, onDark: true),
+                                  SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'ESPACE OPÉRATIONNEL',
+                                          style: TextStyle(
+                                            color: VigimatColors.turquoise,
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w800,
+                                            letterSpacing: 1.5,
+                                          ),
+                                        ),
+                                        SizedBox(height: 2),
+                                        Text(
+                                          'Connexion Sécurisée',
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.w900,
+                                            letterSpacing: -0.3,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
                               ),
-                              const SizedBox(height: 5),
-                              Text(
-                                'Connectez-vous avec votre compte autorisé.',
-                                style: Theme.of(context).textTheme.bodyMedium
-                                    ?.copyWith(color: const Color(0xFFB8CDE2)),
+                              const SizedBox(height: 16),
+
+                              // Sélecteur d'accès rapide pour tests
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 6,
+                                children: [
+                                  _RoleQuickChip(
+                                    label: 'Soldat',
+                                    icon: Icons.person_rounded,
+                                    color: VigimatColors.roleSoldier,
+                                    onTap: () => _fillAccount('soldat@test.com'),
+                                  ),
+                                  _RoleQuickChip(
+                                    label: 'Chef d’Unité',
+                                    icon: Icons.security_rounded,
+                                    color: VigimatColors.roleChief,
+                                    onTap: () => _fillAccount('chef@test.com'),
+                                  ),
+                                  _RoleQuickChip(
+                                    label: 'Technicien',
+                                    icon: Icons.build_rounded,
+                                    color: VigimatColors.roleTechnician,
+                                    onTap: () => _fillAccount('technicien@test.com'),
+                                  ),
+                                ],
                               ),
-                              const SizedBox(height: 20),
-                              TextFormField(
+                              const SizedBox(height: 18),
+
+                              // Champs Saisie
+                              VigimatTextField(
                                 controller: _emailController,
+                                label: 'Identifiant / E-mail',
+                                hint: 'exemple@test.com',
+                                icon: Icons.alternate_email_rounded,
                                 keyboardType: TextInputType.emailAddress,
                                 autofillHints: const [AutofillHints.username],
-                                style: const TextStyle(color: Colors.white),
-                                decoration: _loginFieldDecoration(
-                                  'Adresse e-mail',
-                                  Icons.person_outline_rounded,
-                                ),
+                                onDark: true,
                                 validator: (value) =>
                                     value == null || !value.contains('@')
                                     ? 'Entrez une adresse e-mail valide.'
                                     : null,
                               ),
-                              const SizedBox(height: 12),
-                              TextFormField(
+                              const SizedBox(height: 14),
+                              VigimatTextField(
                                 controller: _passwordController,
-                                obscureText: _obscurePassword,
+                                label: 'Mot de passe',
+                                hint: '••••••••••••',
+                                icon: Icons.lock_outline_rounded,
+                                obscureText: true,
                                 autofillHints: const [AutofillHints.password],
-                                style: const TextStyle(color: Colors.white),
-                                decoration: _loginFieldDecoration(
-                                  'Mot de passe',
-                                  Icons.lock_outline_rounded,
-                                  suffixIcon: IconButton(
-                                    onPressed: () => setState(
-                                      () =>
-                                          _obscurePassword = !_obscurePassword,
-                                    ),
-                                    icon: Icon(
-                                      _obscurePassword
-                                          ? Icons.visibility_outlined
-                                          : Icons.visibility_off_outlined,
-                                      color: Colors.white,
-                                    ),
-                                    tooltip: _obscurePassword
-                                        ? 'Afficher le mot de passe'
-                                        : 'Masquer le mot de passe',
-                                  ),
-                                ),
+                                onDark: true,
                                 validator: (value) =>
                                     value == null || value.isEmpty
                                     ? 'Entrez votre mot de passe.'
                                     : null,
-                                onFieldSubmitted: (_) => _signIn(),
                               ),
+
+                              // Message Erreur
                               AnimatedSwitcher(
                                 duration: const Duration(milliseconds: 220),
                                 child: _error == null
                                     ? const SizedBox.shrink()
                                     : Container(
                                         key: ValueKey(_error),
-                                        margin: const EdgeInsets.only(top: 12),
+                                        margin: const EdgeInsets.only(top: 14),
                                         padding: const EdgeInsets.all(12),
                                         decoration: BoxDecoration(
-                                          color: const Color(0xFFFFF1F0),
-                                          borderRadius: BorderRadius.circular(
-                                            12,
+                                          color: VigimatColors.crimsonSoft,
+                                          borderRadius: BorderRadius.circular(12),
+                                          border: Border.all(
+                                            color: VigimatColors.crimson.withValues(alpha: 0.3),
                                           ),
                                         ),
                                         child: Row(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
                                           children: [
                                             const Icon(
-                                              Icons.error_outline,
-                                              color: VigimatColors.red,
-                                              size: 19,
+                                              Icons.error_outline_rounded,
+                                              color: VigimatColors.crimson,
+                                              size: 20,
                                             ),
-                                            const SizedBox(width: 8),
+                                            const SizedBox(width: 9),
                                             Expanded(
                                               child: Text(
                                                 _error!,
                                                 style: const TextStyle(
-                                                  color: VigimatColors.red,
+                                                  color: VigimatColors.crimsonDark,
+                                                  fontSize: 12.5,
+                                                  fontWeight: FontWeight.w600,
                                                 ),
                                               ),
                                             ),
@@ -381,55 +506,26 @@ class _LoginPageState extends State<LoginPage> {
                                         ),
                                       ),
                               ),
-                              const SizedBox(height: 18),
-                              FilledButton(
-                                onPressed: _loading ? null : _signIn,
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: VigimatColors.turquoise,
-                                  foregroundColor: VigimatColors.navy,
-                                  minimumSize: const Size.fromHeight(54),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(28),
-                                  ),
-                                  textStyle: const TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                                child: AnimatedSwitcher(
-                                  duration: const Duration(milliseconds: 180),
-                                  child: _loading
-                                      ? const SizedBox(
-                                          key: ValueKey('loading'),
-                                          height: 20,
-                                          width: 20,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                            color: VigimatColors.navy,
-                                          ),
-                                        )
-                                      : const FittedBox(
-                                          key: ValueKey('submit'),
-                                          fit: BoxFit.scaleDown,
-                                          child: Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Icon(Icons.login_rounded),
-                                              SizedBox(width: 9),
-                                              Text('Se connecter'),
-                                              SizedBox(width: 7),
-                                              Icon(Icons.arrow_forward_rounded),
-                                            ],
-                                          ),
-                                        ),
-                                ),
+                              const SizedBox(height: 22),
+
+                              // Bouton Connexion
+                              VigimatButton(
+                                text: 'Se connecter',
+                                icon: Icons.login_rounded,
+                                trailingIcon: Icons.arrow_forward_rounded,
+                                loading: _loading,
+                                onPressed: _signIn,
+                                height: 52,
                               ),
-                              const SizedBox(height: 16),
-                              Text(
-                                'Les comptes et leurs rôles sont gérés par l’administrateur.',
+                              const SizedBox(height: 14),
+                              const Text(
+                                'Gestion des comptes et habilitations régie par l’État-Major.',
                                 textAlign: TextAlign.center,
-                                style: Theme.of(context).textTheme.bodySmall
-                                    ?.copyWith(color: const Color(0xFFB8CDE2)),
+                                style: TextStyle(
+                                  color: Color(0xFF94A3B8),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                ),
                               ),
                             ],
                           ),
@@ -445,40 +541,48 @@ class _LoginPageState extends State<LoginPage> {
       ),
     );
   }
+}
 
-  InputDecoration _loginFieldDecoration(
-    String label,
-    IconData icon, {
-    Widget? suffixIcon,
-  }) {
-    final outline = OutlineInputBorder(
-      borderRadius: BorderRadius.circular(28),
-      borderSide: BorderSide(
-        color: VigimatColors.turquoise.withValues(alpha: 0.58),
-      ),
-    );
-    return InputDecoration(
-      labelText: label,
-      labelStyle: const TextStyle(color: Color(0xFFB8CDE2)),
-      prefixIcon: Icon(icon, color: VigimatColors.turquoise),
-      suffixIcon: suffixIcon,
-      filled: true,
-      fillColor: Colors.white.withValues(alpha: 0.045),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
-      enabledBorder: outline,
-      focusedBorder: outline.copyWith(
-        borderSide: const BorderSide(
-          color: VigimatColors.turquoise,
-          width: 1.6,
+class _RoleQuickChip extends StatelessWidget {
+  const _RoleQuickChip({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: color.withValues(alpha: 0.45)),
         ),
-      ),
-      errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(28),
-        borderSide: const BorderSide(color: VigimatColors.red),
-      ),
-      focusedErrorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(28),
-        borderSide: const BorderSide(color: VigimatColors.red, width: 1.6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 13, color: Colors.white),
+            const SizedBox(width: 5),
+            Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

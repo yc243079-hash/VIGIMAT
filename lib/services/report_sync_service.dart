@@ -17,7 +17,7 @@ class ReportSyncService {
   final void Function() onChanged;
   final void Function(Object error) onError;
   StreamSubscription<List<ConnectivityResult>>? _subscription;
-  bool _syncing = false;
+  static Future<bool>? _activeGlobalSync;
 
   void start() {
     if (!SupabaseConfig.isConfigured) return;
@@ -44,50 +44,63 @@ class ReportSyncService {
 
   Future<bool> _runSync() async {
     if (!SupabaseConfig.isConfigured) return true;
-    if (_syncing) return false;
+    while (_activeGlobalSync != null) {
+      try {
+        await _activeGlobalSync;
+      } catch (_) {}
+    }
+    final completer = Completer<bool>();
+    _activeGlobalSync = completer.future;
+
+    try {
+      final result = await _executeSync();
+      completer.complete(result);
+      return result;
+    } catch (error) {
+      completer.complete(false);
+      onError(error);
+      return false;
+    } finally {
+      _activeGlobalSync = null;
+      onChanged();
+    }
+  }
+
+  Future<bool> _executeSync() async {
     final client = Supabase.instance.client;
     final currentUserId = client.auth.currentUser?.id;
     if (currentUserId == null) return false;
 
-    _syncing = true;
-    try {
-      final connectivity = await Connectivity().checkConnectivity();
-      if (connectivity.every((result) => result == ConnectivityResult.none)) {
-        return false;
-      }
-
-      final reports = await LocalReportStore.instance.getPending();
-      for (final report in reports) {
-        if (report.reporterId != currentUserId &&
-            report.technicianId != currentUserId) {
-          continue;
-        }
-        await _syncReport(client, report);
-      }
-
-      final actions = await LocalReportStore.instance.getPendingActions(
-        currentUserId,
-      );
-      for (final row in actions) {
-        final decoded = await LocalReportStore.instance.decodeAction(row);
-        await _syncAction(client, decoded);
-      }
-      final remainingReports = await LocalReportStore.instance.getPending();
-      final remainingActions = await LocalReportStore.instance
-          .getPendingActions(currentUserId);
-      return !remainingReports.any(
-            (report) =>
-                report.reporterId == currentUserId ||
-                report.technicianId == currentUserId,
-          ) &&
-          remainingActions.isEmpty;
-    } catch (error) {
-      onError(error);
+    final connectivity = await Connectivity().checkConnectivity();
+    if (connectivity.every((result) => result == ConnectivityResult.none)) {
       return false;
-    } finally {
-      _syncing = false;
-      onChanged();
     }
+
+    final reports = await LocalReportStore.instance.getPending();
+    for (final report in reports) {
+      if (report.reporterId != currentUserId &&
+          report.technicianId != currentUserId) {
+        continue;
+      }
+      await _syncReport(client, report);
+    }
+
+    final actions = await LocalReportStore.instance.getPendingActions(
+      currentUserId,
+    );
+    for (final row in actions) {
+      final decoded = await LocalReportStore.instance.decodeAction(row);
+      await _syncAction(client, decoded);
+    }
+    final remainingReports = await LocalReportStore.instance.getPending();
+    final remainingActions = await LocalReportStore.instance
+        .getPendingActions(currentUserId);
+    return !remainingReports.any(
+          (report) =>
+              report.reporterId == currentUserId ||
+              report.technicianId == currentUserId,
+        ) &&
+        remainingActions.isEmpty;
   }
 
   Future<void> _syncReport(
@@ -95,6 +108,10 @@ class ReportSyncService {
     MaintenanceReport report,
   ) async {
     final store = LocalReportStore.instance;
+    final normalizedPriority = MaintenanceReport.normalizePriority(report.priority);
+    if (normalizedPriority != report.priority) {
+      await store.updatePriority(report.id, normalizedPriority);
+    }
     await store.updateSyncState(report.id, 'syncing');
     onChanged();
     try {
@@ -107,7 +124,7 @@ class ReportSyncService {
             'equipment_name': report.equipmentName,
             'description': report.description,
             'fault_category': report.faultCategory,
-            'priority': report.priority,
+            'priority': normalizedPriority,
             'location': report.location,
             'vehicle_registration': report.vehicleRegistration,
             'vehicle_details': report.vehicleDetails,
@@ -146,6 +163,7 @@ class ReportSyncService {
       await store.updateSyncState(report.id, 'sent');
     } catch (error) {
       await store.updateSyncState(report.id, 'failed', error: error.toString());
+      onError(error);
     }
     onChanged();
   }
@@ -214,6 +232,7 @@ class ReportSyncService {
         'pending',
         error: error.toString(),
       );
+      onError(error);
     }
     onChanged();
   }

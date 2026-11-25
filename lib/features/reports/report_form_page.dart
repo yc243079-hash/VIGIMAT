@@ -10,9 +10,13 @@ import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../core/theme/vigimat_colors.dart';
 import '../../models/app_user_profile.dart';
 import '../../models/maintenance_report.dart';
 import '../../services/local_report_store.dart';
+import '../../widgets/vigimat_button.dart';
+import '../../widgets/vigimat_image_viewer.dart';
+import '../../widgets/vigimat_text_field.dart';
 
 class ReportFormPage extends StatefulWidget {
   const ReportFormPage({super.key, required this.profile});
@@ -24,7 +28,7 @@ class ReportFormPage extends StatefulWidget {
 }
 
 class _ReportFormPageState extends State<ReportFormPage> {
-  static const _priorities = ['Faible', 'Moyenne', 'Élevée', 'Critique'];
+  static const _priorities = ['Faible', 'Moyenne', 'Haute', 'Critique'];
   static const _maxPhotos = 5;
 
   final _formKey = GlobalKey<FormState>();
@@ -127,7 +131,7 @@ class _ReportFormPageState extends State<ReportFormPage> {
               '${position.latitude.toStringAsFixed(6)}, ${position.longitude.toStringAsFixed(6)}';
         }
         _locationMessage =
-            'Position GPS capturée (±${position.accuracy.round()} m).';
+            'Position GPS fixée (Précision : ±${position.accuracy.round()} m)';
       });
     } catch (error) {
       if (mounted) setState(() => _locationMessage = error.toString());
@@ -329,244 +333,402 @@ class _ReportFormPageState extends State<ReportFormPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Nouveau signalement')),
+      backgroundColor: VigimatColors.background,
+      appBar: AppBar(
+        title: const Text(
+          'Nouveau Signalement',
+          style: TextStyle(
+            color: VigimatColors.navy,
+            fontSize: 18,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
       body: Form(
         key: _formKey,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 40),
           children: [
-            Text(
-              'Déclarer une panne',
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Les informations de votre compte seront jointes automatiquement.',
-            ),
-            const SizedBox(height: 18),
-            TextFormField(
-              controller: _vehicleController,
-              textCapitalization: TextCapitalization.words,
-              decoration: const InputDecoration(
-                labelText: 'Véhicule ou matériel *',
-                prefixIcon: Icon(Icons.directions_car_outlined),
-              ),
-              validator: (value) => value == null || value.trim().isEmpty
-                  ? 'Indiquez le véhicule ou le matériel.'
-                  : null,
-            ),
-            const SizedBox(height: 10),
-            TextFormField(
-              controller: _registrationController,
-              textCapitalization: TextCapitalization.characters,
-              decoration: const InputDecoration(
-                labelText: 'Immatriculation / identifiant',
-                prefixIcon: Icon(Icons.confirmation_number_outlined),
-              ),
-            ),
-            const SizedBox(height: 10),
-            TextFormField(
-              controller: _detailsController,
-              maxLength: 500,
-              decoration: const InputDecoration(
-                labelText: 'Autres informations utiles',
-                hintText: 'Marque, modèle, unité ou contexte',
-                prefixIcon: Icon(Icons.info_outline),
-              ),
-            ),
-            const SizedBox(height: 6),
-            TextFormField(
-              controller: _descriptionController,
-              minLines: 3,
-              maxLines: 5,
-              maxLength: 2000,
-              decoration: const InputDecoration(
-                labelText: 'Description de la panne',
-                hintText: 'Décrivez le problème observé…',
-                alignLabelWithHint: true,
-              ),
-              validator: (value) =>
-                  (value?.trim().length ?? 0) < 10 && _audioPath == null
-                  ? 'Ajoutez une description ou un message vocal.'
-                  : null,
-            ),
-            const SizedBox(height: 14),
-            _sectionTitle('Photos (maximum $_maxPhotos)'),
-            const SizedBox(height: 8),
-            Row(
+            // 1. Identification du matériel
+            _SectionContainer(
+              title: 'IDENTIFICATION DU MATÉRIEL',
+              icon: Icons.shield_outlined,
               children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _selectedPhotoPaths.length >= _maxPhotos
-                        ? null
-                        : () => _pickPhotos(ImageSource.camera),
-                    icon: const Icon(Icons.camera_alt_outlined),
-                    label: const Text('Appareil photo'),
+                VigimatTextField(
+                  controller: _vehicleController,
+                  label: 'Véhicule ou Matériel *',
+                  hint: 'Ex : Toyota YD V0001, Blindé BTR-80',
+                  icon: Icons.directions_car_filled_outlined,
+                  validator: (value) => value == null || value.trim().isEmpty
+                      ? 'Indiquez le véhicule ou le matériel.'
+                      : null,
+                ),
+                const SizedBox(height: 12),
+                VigimatTextField(
+                  controller: _registrationController,
+                  label: 'Immatriculation / Numéro d’ordre',
+                  hint: 'Ex : AAHF-76FH',
+                  icon: Icons.tag_rounded,
+                ),
+                const SizedBox(height: 12),
+                VigimatTextField(
+                  controller: _detailsController,
+                  label: 'Compléments d’identification',
+                  hint: 'Marque, modèle, motorisation, bataillon',
+                  icon: Icons.info_outline_rounded,
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // 2. Description de l'avarie et priorité
+            _SectionContainer(
+              title: 'DESCRIPTION DE L’AVARIE',
+              icon: Icons.warning_amber_rounded,
+              children: [
+                VigimatTextField(
+                  controller: _descriptionController,
+                  label: 'Constat de panne / Problème observé *',
+                  hint: 'Décrivez les symptômes précis observés sur le terrain…',
+                  minLines: 3,
+                  maxLines: 5,
+                  validator: (value) =>
+                      (value?.trim().length ?? 0) < 6 && _audioPath == null
+                      ? 'Ajoutez une description textuelle ou un enregistrement vocal.'
+                      : null,
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Niveau de Priorité Opérationnelle',
+                  style: TextStyle(
+                    color: VigimatColors.textSecondary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _selectedPhotoPaths.length >= _maxPhotos
-                        ? null
-                        : () => _pickPhotos(ImageSource.gallery),
-                    icon: const Icon(Icons.photo_library_outlined),
-                    label: const Text('Galerie'),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: _priorities.map((priority) {
+                    final selected = _priority == priority;
+                    final (fg, bg) = switch (priority.toLowerCase()) {
+                      'critique' => (VigimatColors.crimson, VigimatColors.crimsonSoft),
+                      'haute' || 'élevée' || 'elevee' => (const Color(0xFFEA580C), const Color(0xFFFFEDD5)),
+                      'moyenne' => (VigimatColors.goldDark, VigimatColors.goldSoft),
+                      _ => (VigimatColors.emerald, VigimatColors.emeraldSoft),
+                    };
+
+                    return InkWell(
+                      onTap: () => setState(() => _priority = priority),
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: selected ? fg : Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: selected ? fg : VigimatColors.border,
+                            width: 1.2,
+                          ),
+                        ),
+                        child: Text(
+                          priority.toUpperCase(),
+                          style: TextStyle(
+                            color: selected ? Colors.white : VigimatColors.textSecondary,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // 3. Preuves Multimédia (Photos & Vocal)
+            _SectionContainer(
+              title: 'PREUVES MULTIMÉDIA (PHOTOS & AUDIO)',
+              icon: Icons.perm_media_outlined,
+              children: [
+                // Boutons d'ajout photo
+                Row(
+                  children: [
+                    Expanded(
+                      child: VigimatButton(
+                        text: 'Prendre photo',
+                        icon: Icons.camera_alt_outlined,
+                        variant: VigimatButtonVariant.secondary,
+                        height: 44,
+                        onPressed: _selectedPhotoPaths.length >= _maxPhotos
+                            ? null
+                            : () => _pickPhotos(ImageSource.camera),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: VigimatButton(
+                        text: 'Galerie',
+                        icon: Icons.photo_library_outlined,
+                        variant: VigimatButtonVariant.secondary,
+                        height: 44,
+                        onPressed: _selectedPhotoPaths.length >= _maxPhotos
+                            ? null
+                            : () => _pickPhotos(ImageSource.gallery),
+                      ),
+                    ),
+                  ],
+                ),
+                if (_selectedPhotoPaths.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    height: 80,
+                    child: ListView.builder(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: _selectedPhotoPaths.length,
+                      itemBuilder: (context, index) {
+                        return Container(
+                          width: 80,
+                          margin: const EdgeInsets.only(right: 10),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: VigimatColors.border),
+                          ),
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              GestureDetector(
+                                onTap: () => VigimatImageViewer.showGallery(
+                                  context,
+                                  filePaths: _selectedPhotoPaths,
+                                  initialIndex: index,
+                                ),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(11),
+                                  child: Image.file(
+                                    File(_selectedPhotoPaths[index]),
+                                    fit: BoxFit.cover,
+                                  ),
+                                ),
+                              ),
+                              Positioned(
+                                top: 2,
+                                right: 2,
+                                child: InkWell(
+                                  onTap: () => setState(() => _selectedPhotoPaths.removeAt(index)),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(2),
+                                    decoration: const BoxDecoration(
+                                      color: Colors.black87,
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: const Icon(Icons.close_rounded, size: 14, color: Colors.white),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 16),
+
+                // Enregistrement vocal
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: VigimatColors.background,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: VigimatColors.border),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: _recording
+                              ? VigimatColors.crimson.withValues(alpha: 0.15)
+                              : VigimatColors.navy.withValues(alpha: 0.08),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          _recording ? Icons.mic : Icons.mic_none_rounded,
+                          color: _recording ? VigimatColors.crimson : VigimatColors.navy,
+                          size: 20,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _recording
+                                  ? 'Enregistrement en cours…'
+                                  : _audioPath == null
+                                      ? 'Note vocale (Bruit moteur)'
+                                      : 'Note vocale prête',
+                              style: const TextStyle(
+                                color: VigimatColors.navy,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            Text(
+                              _recording
+                                  ? _durationLabel
+                                  : _audioPath == null
+                                      ? 'Appuyez pour enregistrer un son'
+                                      : 'Durée : $_durationLabel',
+                              style: TextStyle(
+                                color: _recording ? VigimatColors.crimson : VigimatColors.textSecondary,
+                                fontSize: 11.5,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (_recording)
+                        IconButton(
+                          onPressed: _stopRecording,
+                          icon: const Icon(Icons.stop_circle_rounded, color: VigimatColors.crimson, size: 30),
+                        )
+                      else if (_audioPath == null)
+                        IconButton(
+                          onPressed: _toggleRecording,
+                          icon: const Icon(Icons.fiber_manual_record_rounded, color: VigimatColors.crimson, size: 28),
+                        )
+                      else ...[
+                        IconButton(
+                          onPressed: _togglePlayback,
+                          icon: Icon(_playing ? Icons.pause_circle_filled_rounded : Icons.play_circle_fill_rounded,
+                              color: VigimatColors.emerald, size: 28),
+                        ),
+                        IconButton(
+                          onPressed: _removeAudio,
+                          icon: const Icon(Icons.delete_outline_rounded, color: VigimatColors.crimson, size: 22),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
               ],
             ),
-            if (_selectedPhotoPaths.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (
-                    var index = 0;
-                    index < _selectedPhotoPaths.length;
-                    index++
-                  )
-                    InputChip(
-                      label: Text('Photo ${index + 1}'),
-                      avatar: const Icon(Icons.image_outlined),
-                      onDeleted: () =>
-                          setState(() => _selectedPhotoPaths.removeAt(index)),
+            const SizedBox(height: 16),
+
+            // 4. Géolocalisation
+            _SectionContainer(
+              title: 'GÉOLOCALISATION GPS',
+              icon: Icons.my_location_rounded,
+              children: [
+                VigimatTextField(
+                  controller: _locationController,
+                  label: 'Position ou Description du lieu *',
+                  hint: 'Coordonnées GPS ou repère de déploiement',
+                  icon: Icons.pin_drop_outlined,
+                  suffixIcon: IconButton(
+                    onPressed: _capturingLocation ? null : _captureLocation,
+                    tooltip: 'Recapturer GPS',
+                    icon: _capturingLocation
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: VigimatColors.emerald),
+                          )
+                        : const Icon(Icons.refresh_rounded, color: VigimatColors.emerald),
+                  ),
+                  validator: (value) => value == null || value.trim().isEmpty
+                      ? 'Capturez le GPS ou décrivez le lieu.'
+                      : null,
+                ),
+                if (_locationMessage != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    _locationMessage!,
+                    style: const TextStyle(
+                      color: VigimatColors.emeraldDark,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
                     ),
+                  ),
                 ],
-              ),
-            ],
-            const SizedBox(height: 18),
-            _sectionTitle('Message vocal'),
-            const SizedBox(height: 8),
-            Card(
-              child: ListTile(
-                leading: Icon(_recording ? Icons.mic : Icons.mic_none),
-                title: Text(
-                  _recording
-                      ? 'Enregistrement… $_durationLabel'
-                      : 'Ajouter un message vocal',
-                ),
-                subtitle: _audioPath == null
-                    ? null
-                    : Text('Vocal prêt · $_durationLabel'),
-                trailing: _recording
-                    ? IconButton(
-                        onPressed: _stopRecording,
-                        icon: const Icon(Icons.stop_circle_outlined),
-                      )
-                    : _audioPath == null
-                    ? IconButton(
-                        onPressed: _toggleRecording,
-                        icon: const Icon(
-                          Icons.fiber_manual_record,
-                          color: Colors.red,
-                        ),
-                      )
-                    : Wrap(
-                        children: [
-                          IconButton(
-                            onPressed: _togglePlayback,
-                            icon: Icon(
-                              _playing ? Icons.pause : Icons.play_arrow,
-                            ),
-                          ),
-                          IconButton(
-                            onPressed: _removeAudio,
-                            icon: const Icon(Icons.delete_outline),
-                          ),
-                        ],
-                      ),
-              ),
-            ),
-            const SizedBox(height: 18),
-            _sectionTitle('Lieu'),
-            const SizedBox(height: 8),
-            TextFormField(
-              controller: _locationController,
-              maxLength: 250,
-              decoration: InputDecoration(
-                labelText: 'Coordonnées GPS ou description du lieu *',
-                prefixIcon: const Icon(Icons.location_on_outlined),
-                suffixIcon: IconButton(
-                  onPressed: _capturingLocation ? null : _captureLocation,
-                  tooltip: 'Capturer la position GPS',
-                  icon: _capturingLocation
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.my_location),
-                ),
-              ),
-              validator: (value) => value == null || value.trim().isEmpty
-                  ? 'Capturez le GPS ou décrivez le lieu.'
-                  : null,
-            ),
-            if (_locationMessage != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(
-                  _locationMessage!,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-            const SizedBox(height: 18),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.person_outline),
-              title: Text(widget.profile.displayName),
-              subtitle: Text(
-                widget.profile.personnelNumber.isEmpty
-                    ? 'Déclarant · ${widget.profile.unitName}'
-                    : 'Matricule ${widget.profile.personnelNumber} · ${widget.profile.unitName}',
-              ),
-            ),
-            const SizedBox(height: 14),
-            _sectionTitle('Priorité'),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              children: _priorities
-                  .map(
-                    (priority) => ChoiceChip(
-                      label: Text(priority),
-                      selected: _priority == priority,
-                      onSelected: (_) => setState(() => _priority = priority),
-                    ),
-                  )
-                  .toList(),
+              ],
             ),
             const SizedBox(height: 24),
-            FilledButton.icon(
+
+            // Bouton de transmission
+            VigimatButton(
+              text: 'Transmettre le signalement',
+              icon: Icons.send_rounded,
+              loading: _saving,
               onPressed: _saving || _recording ? null : _saveReport,
-              icon: _saving
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.send_outlined),
-              label: Text(
-                _saving ? 'Enregistrement…' : 'Enregistrer le signalement',
-              ),
+              height: 52,
             ),
             const SizedBox(height: 8),
             const Text(
-              'Le signalement reste sur ce téléphone hors réseau et se synchronise automatiquement dès le retour de la connexion.',
+              'Enregistrement direct en local avec synchronisation automatique en tâche de fond.',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12, color: Color(0xFF687386)),
+              style: TextStyle(fontSize: 11.5, color: VigimatColors.textMuted),
             ),
           ],
         ),
       ),
     );
   }
+}
 
-  Widget _sectionTitle(String text) => Text(
-    text,
-    style: Theme.of(context).textTheme.titleMedium
-        ?.copyWith(fontWeight: FontWeight.w700),
-  );
+class _SectionContainer extends StatelessWidget {
+  const _SectionContainer({
+    required this.title,
+    required this.icon,
+    required this.children,
+  });
+
+  final String title;
+  final IconData icon;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: VigimatColors.border),
+        boxShadow: VigimatColors.cardShadow,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 16, color: VigimatColors.emerald),
+              const SizedBox(width: 8),
+              Text(
+                title,
+                style: const TextStyle(
+                  color: VigimatColors.navy,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.8,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          ...children,
+        ],
+      ),
+    );
+  }
 }
