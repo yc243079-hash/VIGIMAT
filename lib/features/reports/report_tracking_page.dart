@@ -1,544 +1,479 @@
+import 'dart:async';
 import 'dart:io';
 
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
 
-import '../../core/supabase_config.dart';
-import '../../core/vigimat_brand.dart';
+import '../../models/app_user_profile.dart';
 import '../../models/maintenance_report.dart';
+import '../../services/local_report_store.dart';
+import '../../services/report_sync_service.dart';
 
 class ReportTrackingPage extends StatefulWidget {
-  const ReportTrackingPage({super.key, required this.report});
+  const ReportTrackingPage({
+    super.key,
+    required this.report,
+    required this.profile,
+  });
 
   final MaintenanceReport report;
+  final AppUserProfile profile;
 
   @override
   State<ReportTrackingPage> createState() => _ReportTrackingPageState();
 }
 
 class _ReportTrackingPageState extends State<ReportTrackingPage> {
-  static const _assigneeStatuses = [
-    'assigned',
-    'in_progress',
-    'waiting_parts',
-    'resolved',
-  ];
-
-  Map<String, dynamic>? _remoteReport;
-  List<Map<String, dynamic>> _history = const [];
-  late final TextEditingController _observationController;
-  String? _selectedStatus;
+  final _player = AudioPlayer();
+  final _repairNoteController = TextEditingController();
+  final _waitingReasonController = TextEditingController();
+  StreamSubscription<PlayerState>? _playerSubscription;
+  late MaintenanceReport _report;
+  List<Map<String, Object?>> _history = const [];
   bool _loading = true;
-  bool _savingStatus = false;
-  String? _error;
+  bool _saving = false;
+  bool _playingAudio = false;
+  String? _loadError;
 
   @override
   void initState() {
     super.initState();
-    _observationController = TextEditingController();
-    _load();
+    _report = widget.report;
+    _playerSubscription = _player.onPlayerStateChanged.listen((state) {
+      if (mounted) setState(() => _playingAudio = state == PlayerState.playing);
+    });
+    unawaited(_load());
   }
 
   @override
   void dispose() {
-    _observationController.dispose();
+    _playerSubscription?.cancel();
+    unawaited(_player.dispose());
+    _repairNoteController.dispose();
+    _waitingReasonController.dispose();
     super.dispose();
   }
 
   Future<void> _load() async {
     setState(() {
       _loading = true;
-      _error = null;
+      _loadError = null;
     });
     try {
-      if (SupabaseConfig.isConfigured && widget.report.syncState == 'sent') {
+      try {
         final client = Supabase.instance.client;
-        final result = await client
+        final row = await client
             .from('maintenance_reports')
-            .select(
-              'reference, fault_category, location, reporter_name, priority, status, created_at, observation, assigned_technician_id, intervention_due_at, photo_object_path, photo_object_paths',
-            )
+            .select(_reportColumns)
             .eq('id', widget.report.id)
             .maybeSingle();
-        if (result == null) {
-          throw StateError(
-            'Ce signalement est indisponible ou votre compte n’y a pas accès.',
+        if (row != null) {
+          final remote = MaintenanceReport.fromSupabaseMap(row);
+          _report = _report.mergeRemote(remote);
+          await LocalReportStore.instance.save(_report);
+          final events = await client
+              .from('maintenance_report_history')
+              .select(
+                'id, event_type, status, observation, actor_id, changed_at',
+              )
+              .eq('report_id', widget.report.id)
+              .order('changed_at')
+              .order('id');
+          await LocalReportStore.instance.saveRemoteHistory(
+            widget.report.id,
+            List<Map<String, dynamic>>.from(events),
           );
         }
-        final history = await client
-            .from('maintenance_report_history')
-            .select('id, event_type, status, observation, changed_at')
-            .eq('report_id', widget.report.id)
-            .order('changed_at')
-            .order('id');
-        if (!mounted) return;
-        setState(() {
-          _remoteReport = Map<String, dynamic>.from(result);
-          _history = List<Map<String, dynamic>>.from(history);
-          final currentStatus = result['status']?.toString();
-          _selectedStatus = _assigneeStatuses.contains(currentStatus)
-              ? currentStatus
-              : null;
-          _observationController.text = result['observation']?.toString() ?? '';
-          _loading = false;
-        });
-        return;
+      } catch (_) {
+        // The device cache is the offline source of truth until reconnection.
       }
-      if (mounted) setState(() => _loading = false);
+      _history = await LocalReportStore.instance.getHistory(widget.report.id);
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _repairNoteController.text = _report.repairNote;
+        _waitingReasonController.text = _report.waitingReason;
+      });
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        _error = error.toString();
         _loading = false;
+        _loadError = error.toString();
       });
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final remote = _remoteReport;
-    final status = remote?['status']?.toString() ?? widget.report.status;
-    final reference =
-        remote?['reference']?.toString() ??
-        widget.report.reference ??
-        'SIG-${widget.report.id.replaceAll('-', '').toUpperCase()}';
-    final createdAt =
-        DateTime.tryParse(remote?['created_at']?.toString() ?? '') ??
-        widget.report.createdAt;
-    final dueAt = DateTime.tryParse(
-      remote?['intervention_due_at']?.toString() ??
-          widget.report.interventionDueAt?.toIso8601String() ??
-          '',
-    );
+  bool get _canTechnicianUpdate =>
+      widget.profile.isTechnician &&
+      _report.assignedTechnicianId == widget.profile.userId &&
+      _report.status != 'closed';
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Suivi du signalement')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
-        children: [
-          VigimatPageHeader(
-            title: 'Suivi et intervention',
-            subtitle:
-                'Consultez le statut, l’échéance et les étapes enregistrées.',
-            icon: Icons.timeline_rounded,
+  Future<void> _showActionDialog({required bool waiting}) async {
+    final controller = waiting
+        ? _waitingReasonController
+        : _repairNoteController;
+    controller.text = waiting ? _report.waitingReason : _report.repairNote;
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          waiting ? 'Signaler un blocage' : 'Déclarer la réparation terminée',
+        ),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          minLines: 3,
+          maxLines: 6,
+          maxLength: 1200,
+          decoration: InputDecoration(
+            labelText: waiting
+                ? 'Motif du blocage *'
+                : 'Compte rendu de réparation *',
+            hintText: waiting
+                ? 'Précisez ce qui empêche la réparation.'
+                : 'Indiquez brièvement la réparation effectuée.',
           ),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(18),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          reference,
-                          style: Theme.of(context).textTheme.titleLarge
-                              ?.copyWith(fontWeight: FontWeight.w800),
-                        ),
-                      ),
-                      if (_canUpdateAsAssignee) ...[
-                        const SizedBox(height: 12),
-                        Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                Text(
-                                  'Mise à jour de l’intervention',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .titleMedium,
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'Échéance : ${dueAt == null ? 'non définie' : _dateTimeLabel(dueAt)}',
-                                  style: const TextStyle(
-                                    color: Color(0xFF687386),
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                DropdownButtonFormField<String>(
-                                  initialValue: _selectedStatus,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Statut',
-                                  ),
-                                  items: _assigneeStatuses
-                                      .map(
-                                        (value) => DropdownMenuItem(
-                                          value: value,
-                                          child: Text(statusLabel(value)),
-                                        ),
-                                      )
-                                      .toList(),
-                                  onChanged: (value) =>
-                                      setState(() => _selectedStatus = value),
-                                ),
-                                const SizedBox(height: 10),
-                                TextField(
-                                  controller: _observationController,
-                                  minLines: 2,
-                                  maxLines: 4,
-                                  decoration: const InputDecoration(
-                                    labelText:
-                                        'Compte rendu ou besoin de pièces',
-                                    alignLabelWithHint: true,
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                FilledButton(
-                                  onPressed:
-                                      _savingStatus || _selectedStatus == null
-                                      ? null
-                                      : _saveAssigneeUpdate,
-                                  child: _savingStatus
-                                      ? const CircularProgressIndicator()
-                                      : const Text('Enregistrer le suivi'),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                      _statusTag(status),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  _detailLine(
-                    Icons.precision_manufacturing_outlined,
-                    widget.report.equipmentName,
-                  ),
-                  _detailLine(
-                    Icons.category_outlined,
-                    remote?['fault_category']?.toString() ??
-                        widget.report.faultCategory,
-                  ),
-                  _detailLine(
-                    Icons.location_on_outlined,
-                    remote?['location']?.toString() ?? widget.report.location,
-                  ),
-                  _detailLine(
-                    Icons.person_outline,
-                    remote?['reporter_name']?.toString() ??
-                        widget.report.reporterName,
-                  ),
-                  _detailLine(
-                    Icons.schedule_outlined,
-                    _dateTimeLabel(createdAt),
-                  ),
-                  const Divider(height: 24),
-                  Text(
-                    'Priorité : ${remote?['priority']?.toString() ?? widget.report.priority}',
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    widget.report.description,
-                    style: const TextStyle(height: 1.45),
-                  ),
-                ],
-              ),
-            ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Annuler'),
           ),
-          if (widget.report.allPhotoPaths.isNotEmpty ||
-              _remotePhotoPaths.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            Text(
-              'Photographies',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 8),
-            SizedBox(
-              height: 128,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                itemCount: widget.report.allPhotoPaths.isNotEmpty
-                    ? widget.report.allPhotoPaths.length
-                    : _remotePhotoPaths.length,
-                separatorBuilder: (_, _) => const SizedBox(width: 10),
-                itemBuilder: (context, index) {
-                  final localPaths = widget.report.allPhotoPaths;
-                  if (localPaths.isNotEmpty) {
-                    final file = File(localPaths[index]);
-                    return ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: file.existsSync()
-                          ? Image.file(
-                              file,
-                              width: 150,
-                              height: 128,
-                              fit: BoxFit.cover,
-                            )
-                          : _photoUnavailable(),
-                    );
-                  }
-                  return _remotePhoto(_remotePhotoPaths[index]);
-                },
-              ),
-            ),
-          ],
-          const SizedBox(height: 22),
-          Text('Chronologie', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 10),
-          if (_loading)
-            const Center(
-              child: Padding(
-                padding: EdgeInsets.all(18),
-                child: CircularProgressIndicator(),
-              ),
-            )
-          else if (_error != null)
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.cloud_off_outlined),
-                title: const Text('Suivi distant indisponible'),
-                subtitle: Text(_error!),
-                trailing: IconButton(
-                  onPressed: _load,
-                  icon: const Icon(Icons.refresh),
-                  tooltip: 'Réessayer',
-                ),
-              ),
-            )
-          else
-            ..._timeline(status, createdAt),
-          if (SupabaseConfig.isConfigured &&
-              widget.report.syncState != 'sent') ...[
-            const SizedBox(height: 8),
-            const Text(
-              'Le suivi en ligne sera disponible après la synchronisation du signalement.',
-              style: TextStyle(color: Color(0xFF687386)),
-            ),
-          ],
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Enregistrer'),
+          ),
         ],
       ),
     );
-  }
-
-  bool get _canUpdateAsAssignee {
-    final currentUserId = SupabaseConfig.isConfigured
-        ? Supabase.instance.client.auth.currentUser?.id
-        : null;
-    final assignedId =
-        _remoteReport?['assigned_technician_id']?.toString() ??
-        widget.report.assignedTechnicianId;
-    return currentUserId != null &&
-        assignedId != null &&
-        assignedId == currentUserId;
-  }
-
-  Future<void> _saveAssigneeUpdate() async {
-    final selectedStatus = _selectedStatus;
-    if (selectedStatus == null || !_assigneeStatuses.contains(selectedStatus)) {
+    if (saved != true) return;
+    final note = controller.text.trim();
+    if (note.isEmpty) {
+      _showMessage('Ajoutez un commentaire avant de continuer.');
       return;
     }
-    setState(() => _savingStatus = true);
-    try {
-      await Supabase.instance.client
-          .from('maintenance_reports')
-          .update({
-            'status': selectedStatus,
-            'observation': _observationController.text.trim(),
-          })
-          .eq('id', widget.report.id);
-      await _load();
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Mise à jour impossible : $error')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _savingStatus = false);
-    }
-  }
-
-  List<String> get _remotePhotoPaths {
-    final report = _remoteReport;
-    if (report == null) return widget.report.remotePhotoPaths;
-    final paths = report['photo_object_paths'];
-    if (paths is List) {
-      final values = paths.whereType<String>().where((path) => path.isNotEmpty);
-      if (values.isNotEmpty) return values.toList(growable: false);
-    }
-    final legacyPath = report['photo_object_path']?.toString();
-    return legacyPath == null || legacyPath.isEmpty ? const [] : [legacyPath];
-  }
-
-  List<Widget> _timeline(String currentStatus, DateTime createdAt) {
-    final entries = _history.isEmpty
-        ? [
-            {
-              'event_type': 'created',
-              'status': currentStatus,
-              'observation': '',
-              'changed_at': createdAt.toIso8601String(),
-            },
-          ]
-        : _history;
-    return [
-      for (var index = 0; index < entries.length; index++)
-        _timelineEntry(entries[index], isLast: index == entries.length - 1),
-    ];
-  }
-
-  Widget _timelineEntry(Map<String, dynamic> entry, {required bool isLast}) {
-    final status = entry['status']?.toString() ?? 'new';
-    final eventType = entry['event_type']?.toString();
-    final created = eventType == 'created';
-    final observation = entry['observation']?.toString().trim() ?? '';
-    final date = DateTime.tryParse(entry['changed_at']?.toString() ?? '');
-    return IntrinsicHeight(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 30,
-            child: Column(
-              children: [
-                Icon(
-                  created ? Icons.fiber_new_outlined : Icons.update_outlined,
-                  size: 20,
-                  color: statusColor(status),
-                ),
-                if (!isLast)
-                  Expanded(
-                    child: Container(
-                      width: 2,
-                      margin: const EdgeInsets.symmetric(vertical: 4),
-                      color: const Color(0xFFDCE3EB),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: 18),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(switch (eventType) {
-                    'created' => 'Signalement créé',
-                    'assigned' => 'Intervention affectée',
-                    'deadline_set' => 'Échéance mise à jour',
-                    _ => 'Suivi mis à jour',
-                  }, style: const TextStyle(fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 3),
-                  Text(
-                    '${statusLabel(status)} · '
-                    '${date == null ? 'Date inconnue' : _dateTimeLabel(date)}',
-                    style: const TextStyle(
-                      color: Color(0xFF687386),
-                      fontSize: 12,
-                    ),
-                  ),
-                  if (!created) ...[
-                    const SizedBox(height: 3),
-                    const Text(
-                      'Traitement par le chef d’unité',
-                      style: TextStyle(color: Color(0xFF687386), fontSize: 12),
-                    ),
-                  ],
-                  if (observation.isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    Text(observation),
-                  ],
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
+    await _queueAction(
+      action: waiting ? 'waiting' : 'repair',
+      payload: waiting
+          ? {'status': 'waiting', 'waiting_reason': note}
+          : {'status': 'repaired_pending_validation', 'repair_note': note},
     );
   }
 
-  Widget _remotePhoto(String path) => FutureBuilder<String>(
-    future: Supabase.instance.client.storage
-        .from('report-attachments')
-        .createSignedUrl(path, 300),
-    builder: (context, snapshot) {
-      if (snapshot.hasError) return _photoUnavailable();
-      if (!snapshot.hasData) {
-        return const SizedBox(
-          width: 150,
-          child: Center(child: CircularProgressIndicator()),
-        );
-      }
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: Image.network(
-          snapshot.data!,
-          width: 150,
-          height: 128,
-          fit: BoxFit.cover,
-          errorBuilder: (_, _, _) => _photoUnavailable(),
-        ),
+  Future<void> _queueAction({
+    required String action,
+    required Map<String, Object?> payload,
+  }) async {
+    setState(() => _saving = true);
+    try {
+      await LocalReportStore.instance.enqueueAction(
+        id: const Uuid().v4(),
+        reportId: _report.id,
+        actorId: widget.profile.userId,
+        action: action,
+        payload: payload,
       );
-    },
-  );
+      final refreshed = await LocalReportStore.instance.getForProfile(
+        widget.profile,
+      );
+      final matching = refreshed.where((item) => item.id == _report.id);
+      if (matching.isNotEmpty) _report = matching.first;
+      _history = await LocalReportStore.instance.getHistory(_report.id);
+      if (mounted) {
+        setState(() {});
+        _showMessage('Mise à jour enregistrée sur ce téléphone.');
+      }
+      unawaited(
+        ReportSyncService(
+          onChanged: () => unawaited(_load()),
+          onError: (error) =>
+              _showMessage('Synchronisation en attente : $error'),
+        ).syncPending(),
+      );
+    } catch (error) {
+      _showMessage('Mise à jour impossible : $error');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
 
-  Widget _photoUnavailable() => Container(
-    width: 150,
-    height: 128,
-    alignment: Alignment.center,
-    decoration: BoxDecoration(
-      color: const Color(0xFFF4F6FA),
-      borderRadius: BorderRadius.circular(12),
-    ),
-    child: const Text('Photo indisponible'),
-  );
+  Future<String?> _signedUrl(String? path) async {
+    if (path == null || path.isEmpty) return null;
+    return Supabase.instance.client.storage
+        .from('report-attachments')
+        .createSignedUrl(path, 300);
+  }
 
-  Widget _detailLine(IconData icon, String value) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: Row(
+  Future<void> _playAudio() async {
+    try {
+      final localPath = _report.audioPath;
+      if (localPath != null && await File(localPath).exists()) {
+        await _player.play(DeviceFileSource(localPath));
+        return;
+      }
+      final remote = await _signedUrl(_report.remoteAudioPath);
+      if (remote == null) throw StateError('Vocal indisponible hors ligne.');
+      await _player.play(UrlSource(remote));
+    } catch (error) {
+      _showMessage('Lecture du vocal impossible : $error');
+    }
+  }
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Détail du signalement')),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
+              children: [
+                if (_loadError != null)
+                  Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.info_outline),
+                      title: const Text('Affichage hors ligne'),
+                      subtitle: Text(_loadError!),
+                    ),
+                  ),
+                _sectionCard(
+                  title: _report.equipmentName,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(_report.reference ?? _report.id),
+                      const SizedBox(height: 8),
+                      _statusChip(_report.status),
+                      const SizedBox(height: 12),
+                      _infoRow('Déclarant', _report.reporterName),
+                      _infoRow('Véhicule', _report.equipmentName),
+                      if (_report.vehicleRegistration.isNotEmpty)
+                        _infoRow(
+                          'Immatriculation / identifiant',
+                          _report.vehicleRegistration,
+                        ),
+                      if (_report.vehicleDetails.isNotEmpty)
+                        _infoRow('Informations', _report.vehicleDetails),
+                      if (_report.description.isNotEmpty)
+                        _infoRow('Description', _report.description),
+                      _infoRow('Lieu', _report.location),
+                      if (_report.latitude != null && _report.longitude != null)
+                        _infoRow(
+                          'GPS',
+                          '${_report.latitude!.toStringAsFixed(6)}, ${_report.longitude!.toStringAsFixed(6)}'
+                              '${_report.locationAccuracyM == null ? '' : ' · ±${_report.locationAccuracyM!.round()} m'}',
+                        ),
+                      _infoRow('Créé le', _dateLabel(_report.createdAt)),
+                      if (_report.repairNote.isNotEmpty)
+                        _infoRow('Compte rendu technicien', _report.repairNote),
+                      if (_report.waitingReason.isNotEmpty)
+                        _infoRow('Blocage', _report.waitingReason),
+                    ],
+                  ),
+                ),
+                if (_report.allPhotoPaths.isNotEmpty ||
+                    _report.remotePhotoPaths.isNotEmpty)
+                  _sectionCard(title: 'Photos', child: _photos()),
+                if (_report.audioPath != null ||
+                    _report.remoteAudioPath != null)
+                  _sectionCard(
+                    title: 'Message vocal',
+                    child: ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.mic_none),
+                      title: const Text('Écouter le vocal joint'),
+                      trailing: IconButton(
+                        onPressed: _playAudio,
+                        icon: Icon(
+                          _playingAudio ? Icons.pause : Icons.play_arrow,
+                        ),
+                      ),
+                    ),
+                  ),
+                _sectionCard(
+                  title: 'Historique',
+                  child: _history.isEmpty
+                      ? const Text('Aucune mise à jour supplémentaire.')
+                      : Column(
+                          children: _history
+                              .map((event) => _historyRow(event))
+                              .toList(),
+                        ),
+                ),
+                if (_canTechnicianUpdate &&
+                    _report.status != 'repaired_pending_validation') ...[
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: _saving
+                        ? null
+                        : () => _showActionDialog(waiting: true),
+                    icon: const Icon(Icons.hourglass_bottom),
+                    label: const Text('Signaler un blocage'),
+                  ),
+                  const SizedBox(height: 8),
+                  FilledButton.icon(
+                    onPressed: _saving
+                        ? null
+                        : () => _showActionDialog(waiting: false),
+                    icon: _saving
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.check_circle_outline),
+                    label: const Text('Déclarer la réparation terminée'),
+                  ),
+                ],
+              ],
+            ),
+    );
+  }
+
+  Widget _photos() {
+    final local = _report.allPhotoPaths;
+    if (local.isNotEmpty) {
+      return Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final path in local)
+            SizedBox(
+              width: 110,
+              height: 90,
+              child: Image.file(
+                File(path),
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) =>
+                    const Icon(Icons.broken_image_outlined),
+              ),
+            ),
+        ],
+      );
+    }
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
       children: [
-        Icon(icon, size: 18, color: const Color(0xFF18A6A6)),
-        const SizedBox(width: 9),
-        Expanded(child: Text(value.isEmpty ? 'Non renseigné' : value)),
+        for (final path in _report.remotePhotoPaths)
+          FutureBuilder<String?>(
+            future: _signedUrl(path),
+            builder: (context, snapshot) {
+              final url = snapshot.data;
+              if (url == null) {
+                return const SizedBox(
+                  width: 110,
+                  height: 90,
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
+              return SizedBox(
+                width: 110,
+                height: 90,
+                child: Image.network(
+                  url,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) =>
+                      const Icon(Icons.broken_image_outlined),
+                ),
+              );
+            },
+          ),
+      ],
+    );
+  }
+
+  Widget _sectionCard({required String title, required Widget child}) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 10),
+          child,
+        ],
+      ),
+    ),
+  );
+
+  Widget _infoRow(String label, String value) => Padding(
+    padding: const EdgeInsets.only(bottom: 7),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 142,
+          child: Text(label, style: const TextStyle(color: Color(0xFF687386))),
+        ),
+        Expanded(child: Text(value.isEmpty ? '—' : value)),
       ],
     ),
   );
 
-  Widget _statusTag(String status) {
-    final color = statusColor(status);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(18),
+  Widget _statusChip(String status) => Chip(
+    label: Text(reportTrackingStatusLabel(status)),
+    avatar: const Icon(Icons.flag_outlined, size: 16),
+  );
+
+  Widget _historyRow(Map<String, Object?> event) {
+    final status = event['status']?.toString() ?? 'new';
+    final note = event['observation']?.toString().trim() ?? '';
+    final type = event['event_type']?.toString() ?? 'updated';
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.circle, size: 10),
+      title: Text(
+        '${reportTrackingStatusLabel(status)} · ${_eventLabel(type)}',
       ),
-      child: Text(
-        statusLabel(status),
-        style: TextStyle(color: color, fontWeight: FontWeight.w700),
+      subtitle: Text(
+        [
+          _dateLabel(
+            DateTime.tryParse(event['changed_at']?.toString() ?? '') ??
+                DateTime.now(),
+          ),
+          if (note.isNotEmpty) note,
+        ].join('\n'),
       ),
     );
   }
 
-  String _dateTimeLabel(DateTime dateTime) {
-    final local = dateTime.toLocal();
-    return '${local.day.toString().padLeft(2, '0')}/'
-        '${local.month.toString().padLeft(2, '0')}/${local.year} · '
-        '${local.hour.toString().padLeft(2, '0')}:'
-        '${local.minute.toString().padLeft(2, '0')}';
+  String _eventLabel(String type) => switch (type) {
+    'created' => 'signalé',
+    'assign' => 'affecté',
+    'waiting' => 'mis en attente',
+    'repair' => 'réparation déclarée',
+    'validate' => 'validé par le chef',
+    'chief_update' => 'mise à jour du chef',
+    _ => 'mis à jour',
+  };
+
+  String _dateLabel(DateTime value) {
+    final date = value.toLocal();
+    return '${date.day.toString().padLeft(2, '0')}/'
+        '${date.month.toString().padLeft(2, '0')}/${date.year} · '
+        '${date.hour.toString().padLeft(2, '0')}:'
+        '${date.minute.toString().padLeft(2, '0')}';
   }
 }
 
-String statusLabel(String status) => switch (status) {
-  'pending' => 'En attente',
-  'assigned' => 'Assigné',
-  'in_progress' => 'En cours d’intervention',
-  'waiting_parts' => 'En attente de pièces',
-  'resolved' => 'Résolu',
-  'closed' => 'Clôturé',
-  _ => 'Nouveau',
-};
+const _reportColumns =
+    'id, reference, equipment_name, description, fault_category, location, latitude, longitude, location_accuracy_m, vehicle_registration, vehicle_details, priority, created_at, updated_at, status, technician_id, reporter_id, unit_id, equipment_id, assigned_technician_id, intervention_due_at, reporter_name, repair_note, waiting_reason, photo_object_path, photo_object_paths, audio_object_path';
 
-Color statusColor(String status) => switch (status) {
-  'resolved' || 'closed' => const Color(0xFF17815E),
-  'waiting_parts' => const Color(0xFFB36B12),
-  'in_progress' || 'assigned' => const Color(0xFF18A6A6),
-  _ => const Color(0xFF142B4A),
+String reportTrackingStatusLabel(String status) => switch (status) {
+  'assigned' => 'Affecté',
+  'waiting' || 'pending' || 'waiting_parts' => 'En attente',
+  'repaired_pending_validation' || 'resolved' => 'Réparé · à valider',
+  'closed' => 'Validé · clôturé',
+  'in_progress' => 'En cours',
+  _ => 'Nouveau',
 };

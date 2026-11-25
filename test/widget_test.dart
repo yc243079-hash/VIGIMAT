@@ -1,22 +1,9 @@
-import 'dart:convert';
-
 import 'package:flutter_test/flutter_test.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:vigimat/features/auth/auth_gate.dart';
 import 'package:vigimat/models/app_notification.dart';
+import 'package:vigimat/models/app_user_profile.dart';
 import 'package:vigimat/models/dashboard_snapshot.dart';
 import 'package:vigimat/models/equipment.dart';
 import 'package:vigimat/models/maintenance_report.dart';
-
-String buildJwtWithRole(String role) {
-  final payload = jsonEncode({
-    'app_metadata': {'role': role},
-    'user_metadata': {},
-    'role': role,
-  });
-  final encoded = base64Url.encode(utf8.encode(payload));
-  return 'header.$encoded.signature';
-}
 
 void main() {
   test('notification maps priority, read state, and direct destination', () {
@@ -200,112 +187,27 @@ void main() {
     expect(merged.remotePhotoPaths, report.remotePhotoPaths);
   });
 
-  test('auth role is normalized from app metadata or user metadata', () {
-    final appUser = User(
-      id: 'user-1',
-      appMetadata: {'role': ' Technician '},
-      userMetadata: {},
-      aud: 'authenticated',
-      confirmationSentAt: null,
-      recoverySentAt: null,
-      emailChangeSentAt: null,
-      newEmail: null,
-      invitedAt: null,
-      actionLink: null,
-      email: 'tech@example.com',
-      phone: '',
-      createdAt: '2026-01-01T00:00:00Z',
-      emailConfirmedAt: null,
-      phoneConfirmedAt: null,
-      lastSignInAt: '2026-01-01T00:00:00Z',
-      role: 'authenticated',
-      updatedAt: '2026-01-01T00:00:00Z',
-      identities: const [],
-      factors: const [],
-      isAnonymous: false,
-    );
-    final fallbackUser = User(
-      id: 'user-2',
-      appMetadata: {},
-      userMetadata: {'role': 'UNIT_HEAD'},
-      aud: 'authenticated',
-      confirmationSentAt: null,
-      recoverySentAt: null,
-      emailChangeSentAt: null,
-      newEmail: null,
-      invitedAt: null,
-      actionLink: null,
-      email: 'chief@example.com',
-      phone: '',
-      createdAt: '2026-01-01T00:00:00Z',
-      emailConfirmedAt: null,
-      phoneConfirmedAt: null,
-      lastSignInAt: '2026-01-01T00:00:00Z',
-      role: 'authenticated',
-      updatedAt: '2026-01-01T00:00:00Z',
-      identities: const [],
-      factors: const [],
-      isAnonymous: false,
-    );
+  test('app profile accepts the three server-managed roles', () {
+    final profile = AppUserProfile.fromMap({
+      'user_id': 'soldier-1',
+      'role': 'soldier',
+      'unit_id': 'unit-1',
+      'unit_name': 'Unité Alpha',
+      'display_name': 'Soldat Test',
+      'personnel_number': 'MAT-001',
+    });
 
-    expect(resolveUserRole(appUser), 'technician');
-    expect(resolveUserRole(fallbackUser), 'unit_head');
+    expect(profile.isSoldier, isTrue);
+    expect(profile.isTechnician, isFalse);
+    expect(profile.unitName, 'Unité Alpha');
+    expect(profile.toMap()['user_id'], 'soldier-1');
     expect(
-      resolveUserRole(
-        User(
-          id: 'user-3',
-          appMetadata: {},
-          userMetadata: {},
-          aud: 'authenticated',
-          confirmationSentAt: null,
-          recoverySentAt: null,
-          emailChangeSentAt: null,
-          newEmail: null,
-          invitedAt: null,
-          actionLink: null,
-          email: 'none@example.com',
-          phone: '',
-          createdAt: '2026-01-01T00:00:00Z',
-          emailConfirmedAt: null,
-          phoneConfirmedAt: null,
-          lastSignInAt: '2026-01-01T00:00:00Z',
-          role: 'authenticated',
-          updatedAt: '2026-01-01T00:00:00Z',
-          identities: const [],
-          factors: const [],
-          isAnonymous: false,
-        ),
-        accessToken: buildJwtWithRole('unit_head'),
-      ),
-      'unit_head',
-    );
-    expect(
-      resolveUserRole(
-        User(
-          id: 'user-4',
-          appMetadata: {},
-          userMetadata: {},
-          aud: 'authenticated',
-          confirmationSentAt: null,
-          recoverySentAt: null,
-          emailChangeSentAt: null,
-          newEmail: null,
-          invitedAt: null,
-          actionLink: null,
-          email: 'none@example.com',
-          phone: '',
-          createdAt: '2026-01-01T00:00:00Z',
-          emailConfirmedAt: null,
-          phoneConfirmedAt: null,
-          lastSignInAt: '2026-01-01T00:00:00Z',
-          role: 'authenticated',
-          updatedAt: '2026-01-01T00:00:00Z',
-          identities: const [],
-          factors: const [],
-          isAnonymous: false,
-        ),
-      ),
-      isNull,
+      () => AppUserProfile.fromMap({
+        'user_id': 'user-1',
+        'role': 'administrator',
+        'unit_id': 'unit-1',
+      }),
+      throwsFormatException,
     );
   });
 }

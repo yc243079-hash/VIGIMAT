@@ -3,29 +3,21 @@ import 'dart:io';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 
-import '../../core/supabase_config.dart';
-import '../../core/vigimat_brand.dart';
+import '../../models/app_user_profile.dart';
 import '../../models/maintenance_report.dart';
-import '../../models/equipment.dart';
-import '../../services/equipment_repository.dart';
 import '../../services/local_report_store.dart';
 
 class ReportFormPage extends StatefulWidget {
-  const ReportFormPage({
-    super.key,
-    this.initialEquipmentId,
-    this.initialEquipmentName,
-  });
+  const ReportFormPage({super.key, required this.profile});
 
-  final String? initialEquipmentId;
-  final String? initialEquipmentName;
+  final AppUserProfile profile;
 
   @override
   State<ReportFormPage> createState() => _ReportFormPageState();
@@ -33,109 +25,45 @@ class ReportFormPage extends StatefulWidget {
 
 class _ReportFormPageState extends State<ReportFormPage> {
   static const _priorities = ['Faible', 'Moyenne', 'Élevée', 'Critique'];
-  static const _faultCategories = [
-    'Électrique',
-    'Mécanique',
-    'Hydraulique',
-    'Pneumatique',
-    'Électronique',
-    'Informatique',
-    'Structure / carrosserie',
-    'Autre',
-  ];
+  static const _maxPhotos = 5;
 
   final _formKey = GlobalKey<FormState>();
+  final _vehicleController = TextEditingController();
+  final _registrationController = TextEditingController();
+  final _detailsController = TextEditingController();
   final _descriptionController = TextEditingController();
   final _locationController = TextEditingController();
   final _picker = ImagePicker();
   final _draftId = const Uuid().v4();
-  final _reportedAt = DateTime.now();
-  final _equipmentRepository = EquipmentRepository();
-  List<Equipment> _equipment = Equipment.demo;
-  final List<String> _photoPaths = [];
-  late final AudioRecorder _recorder;
-  late final AudioPlayer _player;
+  final _recorder = AudioRecorder();
+  final _player = AudioPlayer();
+  final List<String> _selectedPhotoPaths = [];
+  final List<String> _savedPhotoPaths = [];
   StreamSubscription<PlayerState>? _playerSubscription;
   Timer? _recordingTimer;
   Stopwatch? _stopwatch;
-  String? _selectedEquipmentId;
-  String _selectedEquipment = '';
-  String _selectedPriority = _priorities[1];
-  String? _selectedFaultCategory;
+
+  String _priority = 'Moyenne';
   String? _audioPath;
   String? _recordingPath;
-  bool _isRecording = false;
-  bool _isPlaying = false;
-  bool _isSaving = false;
-  bool _loadingEquipment = false;
-  String? _equipmentError;
-  bool _saved = false;
+  double? _latitude;
+  double? _longitude;
+  double? _locationAccuracyM;
   Duration _recordingDuration = Duration.zero;
+  bool _recording = false;
+  bool _playing = false;
+  bool _saving = false;
+  bool _capturingLocation = true;
+  bool _saved = false;
+  String? _locationMessage;
 
   @override
   void initState() {
     super.initState();
-    final initialEquipment = Equipment.demo.where(
-      (item) =>
-          item.id == widget.initialEquipmentId ||
-          item.name == widget.initialEquipmentName,
-    );
-    final selected = initialEquipment.isEmpty
-        ? Equipment.demo.first
-        : initialEquipment.first;
-    _selectedEquipmentId = selected.id;
-    _selectedEquipment = selected.name;
-    _locationController.text = SupabaseConfig.isConfigured
-        ? ''
-        : selected.location ?? '';
-    _recorder = AudioRecorder();
-    _player = AudioPlayer();
     _playerSubscription = _player.onPlayerStateChanged.listen((state) {
-      if (mounted) setState(() => _isPlaying = state == PlayerState.playing);
+      if (mounted) setState(() => _playing = state == PlayerState.playing);
     });
-    if (SupabaseConfig.isConfigured) unawaited(_loadEquipment());
-  }
-
-  Future<void> _loadEquipment() async {
-    setState(() {
-      _loadingEquipment = true;
-      _equipmentError = null;
-    });
-    try {
-      final equipment = await _equipmentRepository.loadAll();
-      final selected = equipment.where(
-        (item) =>
-            item.id == widget.initialEquipmentId ||
-            item.name == widget.initialEquipmentName,
-      );
-      if (!mounted) return;
-      setState(() {
-        _equipment = equipment;
-        if (selected.isNotEmpty) {
-          _selectedEquipmentId = selected.first.id;
-          _selectedEquipment = selected.first.name;
-          if (_locationController.text.trim().isEmpty) {
-            _locationController.text = selected.first.location ?? '';
-          }
-        } else if (equipment.isNotEmpty) {
-          _selectedEquipmentId = equipment.first.id;
-          _selectedEquipment = equipment.first.name;
-          if (_locationController.text.trim().isEmpty) {
-            _locationController.text = equipment.first.location ?? '';
-          }
-        } else {
-          _selectedEquipmentId = null;
-          _selectedEquipment = '';
-        }
-        _loadingEquipment = false;
-      });
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _equipmentError = error.toString();
-        _loadingEquipment = false;
-      });
-    }
+    unawaited(_captureLocation());
   }
 
   @override
@@ -144,36 +72,98 @@ class _ReportFormPageState extends State<ReportFormPage> {
     _playerSubscription?.cancel();
     unawaited(_player.dispose());
     if (!_saved) unawaited(_discardDraft());
+    _recorder.dispose();
+    _vehicleController.dispose();
+    _registrationController.dispose();
+    _detailsController.dispose();
     _descriptionController.dispose();
     _locationController.dispose();
     super.dispose();
   }
 
   Future<void> _discardDraft() async {
-    if (_isRecording) await _recorder.cancel();
-    await _recorder.dispose();
-    final path = _audioPath ?? _recordingPath;
-    if (path != null) await _deleteFile(path);
+    if (_recording) await _recorder.cancel();
+    for (final path in _savedPhotoPaths) {
+      await _deleteFile(path);
+    }
+    final audio = _audioPath ?? _recordingPath;
+    if (audio != null) await _deleteFile(audio);
   }
 
-  Future<void> _selectPhoto(ImageSource source) async {
+  Future<void> _captureLocation() async {
+    setState(() {
+      _capturingLocation = true;
+      _locationMessage = null;
+    });
     try {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        throw StateError('Activez le service de localisation du téléphone.');
+      }
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied) {
+        throw StateError('Autorisez la localisation ou saisissez le lieu.');
+      }
+      if (permission == LocationPermission.deniedForever) {
+        throw StateError(
+          'Autorisez la localisation dans les réglages ou saisissez le lieu.',
+        );
+      }
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 20),
+        ),
+      );
+      if (!mounted) return;
+      setState(() {
+        _latitude = position.latitude;
+        _longitude = position.longitude;
+        _locationAccuracyM = position.accuracy;
+        if (_locationController.text.trim().isEmpty) {
+          _locationController.text =
+              '${position.latitude.toStringAsFixed(6)}, ${position.longitude.toStringAsFixed(6)}';
+        }
+        _locationMessage =
+            'Position GPS capturée (±${position.accuracy.round()} m).';
+      });
+    } catch (error) {
+      if (mounted) setState(() => _locationMessage = error.toString());
+    } finally {
+      if (mounted) setState(() => _capturingLocation = false);
+    }
+  }
+
+  Future<void> _pickPhotos(ImageSource source) async {
+    try {
+      final remaining = _maxPhotos - _selectedPhotoPaths.length;
+      if (remaining <= 0) {
+        _showMessage('Vous pouvez joindre au maximum $_maxPhotos photos.');
+        return;
+      }
       if (source == ImageSource.gallery) {
-        final images = await _picker.pickMultiImage(
+        final photos = await _picker.pickMultiImage(
           imageQuality: 80,
           maxWidth: 1600,
+          limit: remaining,
         );
-        if (images.isNotEmpty && mounted) {
-          setState(() => _photoPaths.addAll(images.map((image) => image.path)));
+        if (mounted && photos.isNotEmpty) {
+          setState(
+            () => _selectedPhotoPaths.addAll(
+              photos.take(remaining).map((photo) => photo.path),
+            ),
+          );
         }
       } else {
-        final image = await _picker.pickImage(
+        final photo = await _picker.pickImage(
           source: source,
           imageQuality: 80,
           maxWidth: 1600,
         );
-        if (image != null && mounted) {
-          setState(() => _photoPaths.add(image.path));
+        if (mounted && photo != null) {
+          setState(() => _selectedPhotoPaths.add(photo.path));
         }
       }
     } catch (error) {
@@ -181,26 +171,14 @@ class _ReportFormPageState extends State<ReportFormPage> {
     }
   }
 
-  String get _reporterName {
-    if (!SupabaseConfig.isConfigured) return 'Agent local';
-    final user = Supabase.instance.client.auth.currentUser;
-    if (user == null) return 'Agent non authentifié';
-    for (final key in ['full_name', 'name', 'display_name']) {
-      final name = user.userMetadata?[key]?.toString().trim();
-      if (name != null && name.isNotEmpty) return name;
-    }
-    return user.email ?? 'Agent ${user.id.substring(0, 8)}';
-  }
-
   Future<void> _toggleRecording() async {
-    if (_isRecording) {
+    if (_recording) {
       await _stopRecording();
       return;
     }
-
     try {
       if (!await _recorder.hasPermission()) {
-        _showMessage('L’accès au microphone est nécessaire pour enregistrer.');
+        _showMessage('Autorisez le microphone pour enregistrer un vocal.');
         return;
       }
       final directory = await getApplicationDocumentsDirectory();
@@ -220,9 +198,9 @@ class _ReportFormPageState extends State<ReportFormPage> {
       _recordingTimer = Timer.periodic(const Duration(seconds: 1), (_) {
         if (mounted) setState(() => _recordingDuration = _stopwatch!.elapsed);
       });
-      setState(() => _isRecording = true);
+      setState(() => _recording = true);
     } catch (error) {
-      _showMessage('Échec du démarrage de l’enregistrement : $error');
+      _showMessage('Échec de l’enregistrement : $error');
     }
   }
 
@@ -233,15 +211,15 @@ class _ReportFormPageState extends State<ReportFormPage> {
       _stopwatch?.stop();
       final recordedPath = path ?? _recordingPath;
       if (recordedPath == null || !await File(recordedPath).exists()) {
-        throw StateError('Le fichier audio n’a pas été créé.');
+        throw StateError('Le fichier vocal n’a pas été créé.');
       }
       setState(() {
         _audioPath = recordedPath;
-        _isRecording = false;
+        _recording = false;
       });
     } catch (error) {
-      setState(() => _isRecording = false);
-      _showMessage('Impossible de terminer l’enregistrement : $error');
+      setState(() => _recording = false);
+      _showMessage('Impossible de terminer le vocal : $error');
     }
   }
 
@@ -249,106 +227,86 @@ class _ReportFormPageState extends State<ReportFormPage> {
     final path = _audioPath;
     if (path == null) return;
     try {
-      if (_isPlaying) {
+      if (_playing) {
         await _player.pause();
       } else {
         await _player.play(DeviceFileSource(path));
       }
     } catch (error) {
-      _showMessage('Impossible de lire le message vocal : $error');
+      _showMessage('Lecture du vocal impossible : $error');
     }
   }
 
   Future<void> _removeAudio() async {
     final path = _audioPath;
     if (path == null) return;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Supprimer le vocal ?'),
-        content: const Text(
-          'Cet enregistrement sera supprimé de cet appareil.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Annuler'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Supprimer'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
     await _player.stop();
     await _deleteFile(path);
     if (mounted) {
       setState(() {
         _audioPath = null;
         _recordingDuration = Duration.zero;
-        _isPlaying = false;
+        _playing = false;
       });
     }
   }
 
   Future<void> _saveReport() async {
     if (!_formKey.currentState!.validate()) return;
-    final description = _descriptionController.text.trim();
-
-    setState(() => _isSaving = true);
-    final savedPhotoPaths = <String>[];
+    setState(() => _saving = true);
     try {
-      if (_photoPaths.isNotEmpty) {
-        final directory = await getApplicationDocumentsDirectory();
-        final attachments = Directory(
-          p.join(directory.path, 'vigimat_reports'),
+      final directory = await getApplicationDocumentsDirectory();
+      final attachments = Directory(p.join(directory.path, 'vigimat_reports'));
+      await attachments.create(recursive: true);
+      for (var index = 0; index < _selectedPhotoPaths.length; index++) {
+        final source = _selectedPhotoPaths[index];
+        final extension = p.extension(source).isEmpty
+            ? '.jpg'
+            : p.extension(source);
+        final target = p.join(
+          attachments.path,
+          '${_draftId}_${index + 1}$extension',
         );
-        await attachments.create(recursive: true);
-        for (var index = 0; index < _photoPaths.length; index++) {
-          final extension = p.extension(_photoPaths[index]).isEmpty
-              ? '.jpg'
-              : p.extension(_photoPaths[index]);
-          final savedPath = p.join(
-            attachments.path,
-            '${_draftId}_${index + 1}$extension',
-          );
-          await File(_photoPaths[index]).copy(savedPath);
-          savedPhotoPaths.add(savedPath);
-        }
+        await File(source).copy(target);
+        _savedPhotoPaths.add(target);
       }
 
+      final now = DateTime.now();
       final report = MaintenanceReport(
         id: _draftId,
-        equipmentName: _selectedEquipment,
-        description: description,
-        priority: _selectedPriority,
-        createdAt: _reportedAt,
+        equipmentName: _vehicleController.text.trim(),
+        description: _descriptionController.text.trim(),
+        priority: _priority,
+        createdAt: now,
         syncState: 'pending',
-        technicianId: SupabaseConfig.isConfigured
-            ? Supabase.instance.client.auth.currentUser?.id
-            : null,
-        equipmentId: _selectedEquipmentId,
+        technicianId: widget.profile.userId,
+        reporterId: widget.profile.userId,
+        unitId: widget.profile.unitId,
         reference: 'SIG-${_draftId.replaceAll('-', '').toUpperCase()}',
-        faultCategory: _selectedFaultCategory!,
+        faultCategory: 'Autre',
         location: _locationController.text.trim(),
-        reporterName: _reporterName,
+        reporterName: widget.profile.displayName,
+        vehicleRegistration: _registrationController.text.trim(),
+        vehicleDetails: _detailsController.text.trim(),
+        latitude: _latitude,
+        longitude: _longitude,
+        locationAccuracyM: _locationAccuracyM,
         status: 'new',
-        photoPath: savedPhotoPaths.isEmpty ? null : savedPhotoPaths.first,
-        photoPaths: savedPhotoPaths,
+        photoPath: _savedPhotoPaths.isEmpty ? null : _savedPhotoPaths.first,
+        photoPaths: List.unmodifiable(_savedPhotoPaths),
         audioPath: _audioPath,
       );
-      await LocalReportStore.instance.save(report);
+      await LocalReportStore.instance.saveNewReport(report);
       _saved = true;
       if (mounted) Navigator.pop(context, true);
     } catch (error) {
-      for (final path in savedPhotoPaths) {
+      for (final path in _savedPhotoPaths) {
         await _deleteFile(path);
       }
+      _savedPhotoPaths.clear();
       _showMessage('Le signalement n’a pas pu être sauvegardé : $error');
     } finally {
-      if (mounted) setState(() => _isSaving = false);
+      if (mounted) setState(() => _saving = false);
     }
   }
 
@@ -364,218 +322,226 @@ class _ReportFormPageState extends State<ReportFormPage> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
-  String get _formattedDuration {
-    final minutes = _recordingDuration.inMinutes.toString().padLeft(2, '0');
-    final seconds = (_recordingDuration.inSeconds % 60).toString().padLeft(
-      2,
-      '0',
-    );
-    return '$minutes:$seconds';
-  }
+  String get _durationLabel =>
+      '${_recordingDuration.inMinutes.toString().padLeft(2, '0')}:'
+      '${(_recordingDuration.inSeconds % 60).toString().padLeft(2, '0')}';
 
   @override
   Widget build(BuildContext context) {
-    final equipmentReady =
-        !SupabaseConfig.isConfigured ||
-        (!_loadingEquipment &&
-            _equipmentError == null &&
-            _selectedEquipmentId != null &&
-            _equipment.any(
-              (equipment) => equipment.id == _selectedEquipmentId,
-            ));
     return Scaffold(
       appBar: AppBar(title: const Text('Nouveau signalement')),
       body: Form(
         key: _formKey,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+          padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
           children: [
-            VigimatPageHeader(
-              title: 'Déclarer un incident',
-              subtitle: 'Précisez l’équipement et les symptômes observés.',
-              icon: Icons.report_problem_outlined,
+            Text(
+              'Déclarer une panne',
+              style: Theme.of(context).textTheme.headlineSmall,
             ),
-            const SizedBox(height: 22),
-            _sectionTitle('Équipement concerné'),
-            const SizedBox(height: 8),
-            DropdownButtonFormField<String>(
-              initialValue:
-                  _equipment.any(
-                    (equipment) => equipment.id == _selectedEquipmentId,
-                  )
-                  ? _selectedEquipmentId
-                  : null,
-              decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.precision_manufacturing_outlined),
-              ),
-              items: _equipment
-                  .map(
-                    (item) => DropdownMenuItem(
-                      value: item.id,
-                      child: Text(
-                        '${item.reference ?? item.id} · ${item.name}',
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (value) {
-                if (value != null) {
-                  final selected = _equipment.firstWhere(
-                    (item) => item.id == value,
-                  );
-                  setState(() {
-                    _selectedEquipmentId = selected.id;
-                    _selectedEquipment = selected.name;
-                    _locationController.text = selected.location ?? '';
-                  });
-                }
-              },
-              validator: (value) =>
-                  value == null ? 'Sélectionnez un équipement.' : null,
+            const SizedBox(height: 6),
+            Text(
+              'Les informations de votre compte seront jointes automatiquement.',
             ),
-            if (_loadingEquipment) ...[
-              const SizedBox(height: 8),
-              const LinearProgressIndicator(),
-            ],
-            if (_equipmentError != null) ...[
-              const SizedBox(height: 6),
-              Text(
-                'Chargement des équipements impossible : $_equipmentError',
-                style: const TextStyle(color: Colors.red),
-              ),
-              TextButton.icon(
-                onPressed: _loadEquipment,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Réessayer'),
-              ),
-            ] else if (!_loadingEquipment &&
-                _equipment.isEmpty &&
-                SupabaseConfig.isConfigured) ...[
-              const SizedBox(height: 6),
-              const Text(
-                'Aucun équipement autorisé n’est encore enregistré dans Supabase.',
-                style: TextStyle(color: Color(0xFF687386)),
-              ),
-            ],
-            const SizedBox(height: 20),
-            _sectionTitle('Catégorie de panne'),
-            const SizedBox(height: 8),
-            DropdownButtonFormField<String>(
-              initialValue: _selectedFaultCategory,
-              decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.category_outlined),
-              ),
-              items: _faultCategories
-                  .map(
-                    (category) => DropdownMenuItem(
-                      value: category,
-                      child: Text(category),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (value) =>
-                  setState(() => _selectedFaultCategory = value),
-              validator: (value) =>
-                  value == null ? 'Sélectionnez une catégorie.' : null,
-            ),
-            const SizedBox(height: 20),
-            _sectionTitle('Localisation'),
-            const SizedBox(height: 8),
+            const SizedBox(height: 18),
             TextFormField(
-              controller: _locationController,
-              maxLength: 160,
+              controller: _vehicleController,
+              textCapitalization: TextCapitalization.words,
               decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.location_on_outlined),
-                hintText: 'Lieu précis de la panne',
+                labelText: 'Véhicule ou matériel *',
+                prefixIcon: Icon(Icons.directions_car_outlined),
               ),
               validator: (value) => value == null || value.trim().isEmpty
-                  ? 'Indiquez la localisation.'
+                  ? 'Indiquez le véhicule ou le matériel.'
                   : null,
             ),
-            const SizedBox(height: 12),
-            _sectionTitle('Description écrite'),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
+            TextFormField(
+              controller: _registrationController,
+              textCapitalization: TextCapitalization.characters,
+              decoration: const InputDecoration(
+                labelText: 'Immatriculation / identifiant',
+                prefixIcon: Icon(Icons.confirmation_number_outlined),
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextFormField(
+              controller: _detailsController,
+              maxLength: 500,
+              decoration: const InputDecoration(
+                labelText: 'Autres informations utiles',
+                hintText: 'Marque, modèle, unité ou contexte',
+                prefixIcon: Icon(Icons.info_outline),
+              ),
+            ),
+            const SizedBox(height: 6),
             TextFormField(
               controller: _descriptionController,
               minLines: 3,
               maxLines: 5,
               maxLength: 2000,
               decoration: const InputDecoration(
-                hintText: 'Décrivez brièvement le problème observé…',
+                labelText: 'Description de la panne',
+                hintText: 'Décrivez le problème observé…',
                 alignLabelWithHint: true,
               ),
-              validator: (value) => value == null || value.trim().length < 10
-                  ? 'Décrivez la panne en au moins 10 caractères.'
+              validator: (value) =>
+                  (value?.trim().length ?? 0) < 10 && _audioPath == null
+                  ? 'Ajoutez une description ou un message vocal.'
                   : null,
             ),
-            const SizedBox(height: 12),
-            _sectionTitle('Photographies'),
+            const SizedBox(height: 14),
+            _sectionTitle('Photos (maximum $_maxPhotos)'),
             const SizedBox(height: 8),
             Row(
               children: [
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: () => _selectPhoto(ImageSource.camera),
+                    onPressed: _selectedPhotoPaths.length >= _maxPhotos
+                        ? null
+                        : () => _pickPhotos(ImageSource.camera),
                     icon: const Icon(Icons.camera_alt_outlined),
-                    label: const Text('Prendre une photo'),
+                    label: const Text('Appareil photo'),
                   ),
                 ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 8),
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: () => _selectPhoto(ImageSource.gallery),
+                    onPressed: _selectedPhotoPaths.length >= _maxPhotos
+                        ? null
+                        : () => _pickPhotos(ImageSource.gallery),
                     icon: const Icon(Icons.photo_library_outlined),
-                    label: const Text('Choisir plusieurs'),
+                    label: const Text('Galerie'),
                   ),
                 ),
               ],
             ),
-            if (_photoPaths.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              _photoGallery(),
+            if (_selectedPhotoPaths.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (
+                    var index = 0;
+                    index < _selectedPhotoPaths.length;
+                    index++
+                  )
+                    InputChip(
+                      label: Text('Photo ${index + 1}'),
+                      avatar: const Icon(Icons.image_outlined),
+                      onDeleted: () =>
+                          setState(() => _selectedPhotoPaths.removeAt(index)),
+                    ),
+                ],
+              ),
             ],
-            const SizedBox(height: 20),
-            _sectionTitle('Date et heure du signalement'),
+            const SizedBox(height: 18),
+            _sectionTitle('Message vocal'),
             const SizedBox(height: 8),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.schedule_outlined),
-              title: Text(_dateTimeLabel(_reportedAt)),
-              subtitle: const Text('Horodatage automatique'),
+            Card(
+              child: ListTile(
+                leading: Icon(_recording ? Icons.mic : Icons.mic_none),
+                title: Text(
+                  _recording
+                      ? 'Enregistrement… $_durationLabel'
+                      : 'Ajouter un message vocal',
+                ),
+                subtitle: _audioPath == null
+                    ? null
+                    : Text('Vocal prêt · $_durationLabel'),
+                trailing: _recording
+                    ? IconButton(
+                        onPressed: _stopRecording,
+                        icon: const Icon(Icons.stop_circle_outlined),
+                      )
+                    : _audioPath == null
+                    ? IconButton(
+                        onPressed: _toggleRecording,
+                        icon: const Icon(
+                          Icons.fiber_manual_record,
+                          color: Colors.red,
+                        ),
+                      )
+                    : Wrap(
+                        children: [
+                          IconButton(
+                            onPressed: _togglePlayback,
+                            icon: Icon(
+                              _playing ? Icons.pause : Icons.play_arrow,
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: _removeAudio,
+                            icon: const Icon(Icons.delete_outline),
+                          ),
+                        ],
+                      ),
+              ),
             ),
-            _sectionTitle('Agent déclarant'),
+            const SizedBox(height: 18),
+            _sectionTitle('Lieu'),
             const SizedBox(height: 8),
+            TextFormField(
+              controller: _locationController,
+              maxLength: 250,
+              decoration: InputDecoration(
+                labelText: 'Coordonnées GPS ou description du lieu *',
+                prefixIcon: const Icon(Icons.location_on_outlined),
+                suffixIcon: IconButton(
+                  onPressed: _capturingLocation ? null : _captureLocation,
+                  tooltip: 'Capturer la position GPS',
+                  icon: _capturingLocation
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.my_location),
+                ),
+              ),
+              validator: (value) => value == null || value.trim().isEmpty
+                  ? 'Capturez le GPS ou décrivez le lieu.'
+                  : null,
+            ),
+            if (_locationMessage != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  _locationMessage!,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            const SizedBox(height: 18),
             ListTile(
               contentPadding: EdgeInsets.zero,
               leading: const Icon(Icons.person_outline),
-              title: Text(_reporterName),
-              subtitle: const Text('Identité du compte connecté'),
+              title: Text(widget.profile.displayName),
+              subtitle: Text(
+                widget.profile.personnelNumber.isEmpty
+                    ? 'Déclarant · ${widget.profile.unitName}'
+                    : 'Matricule ${widget.profile.personnelNumber} · ${widget.profile.unitName}',
+              ),
             ),
-            const SizedBox(height: 20),
-            _sectionTitle('Message vocal'),
-            const SizedBox(height: 8),
-            _audioCard(),
-            const SizedBox(height: 20),
+            const SizedBox(height: 14),
             _sectionTitle('Priorité'),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
-              children: _priorities.map((priority) {
-                return ChoiceChip(
-                  label: Text(priority),
-                  selected: _selectedPriority == priority,
-                  onSelected: (_) =>
-                      setState(() => _selectedPriority = priority),
-                );
-              }).toList(),
+              children: _priorities
+                  .map(
+                    (priority) => ChoiceChip(
+                      label: Text(priority),
+                      selected: _priority == priority,
+                      onSelected: (_) => setState(() => _priority = priority),
+                    ),
+                  )
+                  .toList(),
             ),
-            const SizedBox(height: 28),
+            const SizedBox(height: 24),
             FilledButton.icon(
-              onPressed: _isSaving || _isRecording || !equipmentReady
-                  ? null
-                  : _saveReport,
-              icon: _isSaving
+              onPressed: _saving || _recording ? null : _saveReport,
+              icon: _saving
                   ? const SizedBox(
                       width: 18,
                       height: 18,
@@ -583,16 +549,12 @@ class _ReportFormPageState extends State<ReportFormPage> {
                     )
                   : const Icon(Icons.send_outlined),
               label: Text(
-                _isSaving ? 'Enregistrement…' : 'Enregistrer le signalement',
-              ),
-              style: FilledButton.styleFrom(
-                minimumSize: const Size.fromHeight(52),
-                backgroundColor: const Color(0xFF142B4A),
+                _saving ? 'Enregistrement…' : 'Enregistrer le signalement',
               ),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
             const Text(
-              'Le signalement est conservé sur cet appareil et sera synchronisé lorsqu’une connexion sera disponible.',
+              'Le signalement reste sur ce téléphone hors réseau et se synchronise automatiquement dès le retour de la connexion.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 12, color: Color(0xFF687386)),
             ),
@@ -602,92 +564,9 @@ class _ReportFormPageState extends State<ReportFormPage> {
     );
   }
 
-  Widget _sectionTitle(String title) => Text(
-    title,
-    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+  Widget _sectionTitle(String text) => Text(
+    text,
+    style: Theme.of(context).textTheme.titleMedium
+        ?.copyWith(fontWeight: FontWeight.w700),
   );
-
-  Widget _photoGallery() => Wrap(
-    spacing: 10,
-    runSpacing: 10,
-    children: [
-      for (var index = 0; index < _photoPaths.length; index++)
-        Stack(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Image.file(
-                File(_photoPaths[index]),
-                width: 112,
-                height: 100,
-                fit: BoxFit.cover,
-              ),
-            ),
-            Positioned(
-              top: 4,
-              right: 4,
-              child: IconButton.filled(
-                onPressed: () => setState(() => _photoPaths.removeAt(index)),
-                icon: const Icon(Icons.close, size: 16),
-                tooltip: 'Retirer la photo',
-              ),
-            ),
-          ],
-        ),
-    ],
-  );
-
-  String _dateTimeLabel(DateTime dateTime) {
-    final local = dateTime.toLocal();
-    return '${local.day.toString().padLeft(2, '0')}/'
-        '${local.month.toString().padLeft(2, '0')}/${local.year} · '
-        '${local.hour.toString().padLeft(2, '0')}:'
-        '${local.minute.toString().padLeft(2, '0')}';
-  }
-
-  Widget _audioCard() {
-    if (_audioPath != null) {
-      return Card(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-          child: Row(
-            children: [
-              IconButton(
-                onPressed: _togglePlayback,
-                icon: Icon(_isPlaying ? Icons.pause_circle : Icons.play_circle),
-                iconSize: 34,
-                color: const Color(0xFF18A6A6),
-                tooltip: _isPlaying ? 'Mettre en pause' : 'Écouter le vocal',
-              ),
-              Expanded(
-                child: Text(
-                  'Message vocal · $_formattedDuration',
-                  style: const TextStyle(fontWeight: FontWeight.w500),
-                ),
-              ),
-              IconButton(
-                onPressed: _removeAudio,
-                icon: const Icon(Icons.delete_outline),
-                tooltip: 'Supprimer le vocal',
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    return OutlinedButton.icon(
-      onPressed: _toggleRecording,
-      icon: Icon(_isRecording ? Icons.stop_circle_outlined : Icons.mic_none),
-      label: Text(
-        _isRecording
-            ? 'Arrêter · $_formattedDuration'
-            : 'Enregistrer un message vocal',
-      ),
-      style: OutlinedButton.styleFrom(
-        foregroundColor: _isRecording ? Colors.red.shade700 : null,
-        minimumSize: const Size.fromHeight(48),
-      ),
-    );
-  }
 }
